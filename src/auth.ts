@@ -1,0 +1,84 @@
+import { betterAuth } from 'better-auth'
+import { github } from 'better-auth/social-providers'
+
+export type AuthBindings = {
+  DB: D1Database
+  BETTER_AUTH_SECRET?: string
+  APP_NAME?: string
+  BETTER_AUTH_URL?: string
+  GITHUB_CLIENT_ID?: string
+  GITHUB_CLIENT_SECRET?: string
+}
+
+export type Auth = ReturnType<typeof createAuth>
+
+export function createAuth(env: AuthBindings) {
+  const githubConfigured = env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
+  return betterAuth({
+    appName: env.APP_NAME || 'hide-port-tool',
+    baseURL: env.BETTER_AUTH_URL,
+    secret: env.BETTER_AUTH_SECRET,
+    database: env.DB,
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: 8,
+      autoSignIn: true
+    },
+    user: {
+      additionalFields: {
+        role: {
+          type: 'string',
+          required: false,
+          defaultValue: 'user',
+          input: false
+        }
+      }
+    },
+    socialProviders: githubConfigured
+      ? {
+          github: {
+            clientId: env.GITHUB_CLIENT_ID!,
+            clientSecret: env.GITHUB_CLIENT_SECRET!,
+            scope: ['user:email']
+          }
+        }
+      : undefined
+  })
+}
+
+export type AuthUser = {
+  id: string
+  name: string
+  email: string
+  emailVerified: boolean
+  image?: string | null | undefined
+  role?: string | null | undefined
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type AuthSession = {
+  session: { id: string; userId: string; expiresAt: Date; token: string }
+  user: AuthUser
+}
+
+export async function getCurrentSession(env: AuthBindings, headers: Headers): Promise<AuthSession | null> {
+  const auth = createAuth(env)
+  return await auth.api.getSession({ headers })
+}
+
+export async function getCurrentUser(env: AuthBindings, headers: Headers): Promise<AuthUser | null> {
+  const s = await getCurrentSession(env, headers)
+  return s ? { ...s.user, role: (s.user as any).role as string | undefined } : null
+}
+
+export async function isAdmin(env: AuthBindings, headers: Headers): Promise<boolean> {
+  const user = await getCurrentUser(env, headers)
+  return !!user && user.role === 'admin'
+}
+
+export async function requireAdmin(env: AuthBindings, headers: Headers): Promise<AuthUser | null> {
+  const user = await getCurrentUser(env, headers)
+  if (!user || user.role !== 'admin') return null
+  return user
+}
