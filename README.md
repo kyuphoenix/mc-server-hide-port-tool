@@ -1,139 +1,183 @@
-# Minecraft 绔彛闅愯棌宸ュ叿
+# Minecraft 端口隐藏工具
 
-鍩轰簬 Cloudflare Workers + Hono + better-auth 瀹炵幇鐨?Minecraft 绔彛闅愯棌宸ュ叿銆傞€氳繃 Cloudflare DNS SRV 璁板綍璁╃帺瀹舵棤闇€杈撳叆绔彛鍙峰嵆鍙繛鎺ユ湇鍔″櫒銆?
-涓昏鐗规€э細
+基于 Cloudflare Workers + Hono + better-auth 实现的 Minecraft 端口隐藏工具。通过 Cloudflare DNS SRV 记录让玩家无需输入端口号即可连接服务器。
 
-- **棣栨鍚姩鑷姩 onboarding**锛氭娴嬪埌鏃犵敤鎴锋椂寮哄埗璺宠浆 `/setup` 鍒涘缓棣栦釜绠＄悊鍛樺苟鐩存帴鐧诲綍锛涢涓敤鎴疯嚜鍔ㄨ鏍囪涓恒€岃秴绾х鐞嗗憳銆嶏紙涓嶅彲琚叾浠栫鐞嗗憳闄嶇骇鎴栧垹闄わ級
-- **澶氳鑹叉潈闄?*锛氭櫘閫氱敤鎴峰彲鍒涘缓/鍒犻櫎鑷繁鐨?DNS 璁板綍锛涚鐞嗗憳鍙闂悗鍙扮鐞嗘墍鏈夌敤鎴枫€佹墍鏈夎褰曞拰鍏ㄥ眬璁剧疆锛涚鐞嗗憳鍙湪鍚庡彴鎵嬪姩鍒涘缓鐢ㄦ埛锛堟棤闇€璧版敞鍐岄〉锛?- **鍙厤缃殑娉ㄥ唽娴佺▼**锛氱鐞嗗憳鍙湪鍚庡彴寮€鍚?鍏抽棴娉ㄥ唽锛岄€夋嫨銆岄偖绠?/ GitHub / 閭+GitHub銆嶄笁绉嶆柟寮忎箣涓€
-- **閭鍚庣紑鐧?榛戝悕鍗?*锛氬彲鍚屾椂鍚敤锛屾寜鍚庣紑鍖归厤锛堟敮鎸佸瓙鍩熷悗缂€锛屽濉?`gmail.com` 浼氬悓鏃跺尮閰?`mail.gmail.com`锛?- **閭楠岃瘉鐮?*锛氬惎鐢?Resend 鍚庯紝閭娉ㄥ唽闇€鍏堟敹鍒?6 浣嶉獙璇佺爜锛涙湭鍚敤鏃惰緭鍏ラ偖绠卞瘑鐮佺洿鎺ュ畬鎴愭敞鍐?- **GitHub OAuth 娉ㄥ唽**锛氬彲闄愬畾 GitHub 璐﹀彿娉ㄥ唽鏈€鐭ぉ鏁帮紙鐢?access token 璋?`/user` 鍙?`created_at` 姣斿锛屼笉杈炬爣浼氬洖婊氬凡鍒涘缓璐﹀彿锛?- **澶氭牴鍩熷悕鏀寔**锛氭瘡涓牴鍩熷悕浣跨敤鐙珛鐨?Cloudflare API Token锛堟寜 `<鍩熷悕鐐规崲涓嬪垝绾?_CLOUDFLARE_API_TOKEN` 鍛藉悕锛夛紝鍙搴斾笉鍚?Cloudflare 璐︽埛
-- **璁板綍鏁伴噺涓婇檺**锛氬叏灞€ `max_records_per_user` 鎺у埗榛樿姣忕敤鎴峰彲鍒涘缓 DNS 璁板綍鏁帮紱绠＄悊鍛樺彲鍦ㄥ悗鍙板鍗曚釜鐢ㄦ埛瑕嗙洊璇ヤ笂闄?- **瀛愬煙鍚嶆渶灏忓瓧绗﹂暱搴?*锛氬叏灞€ `min_subdomain_length` 闄愬埗瀛愬煙鍚嶆渶鐭瓧绗︽暟锛堜緥濡傝涓?4 鏃跺彧鑳界敤 `1111.example.com` 鎴栨洿闀匡級
-- **D1 鎸佷箙鍖?*锛氱敤鎴枫€佷細璇濄€丏NS 璁板綍褰掑睘銆侀獙璇佺爜銆佸叏灞€璁剧疆鍏ㄩ儴瀛樹簬 Cloudflare D1
-- **GitHub Actions 涓€閿儴缃?*锛欳I 鑷姩鍒涘缓 D1銆佸簲鐢ㄨ縼绉汇€佹敞鍏?secrets/vars 骞堕儴缃?Worker锛岃瑙?[閮ㄧ讲鏂规硶](#閮ㄧ讲鏂规硶)
+主要特性：
 
-## 鎶€鏈爤
+- **首次启动自动 onboarding**：检测到无用户时强制跳转 `/setup` 创建首个管理员并直接登录；首个用户自动被标记为「超级管理员」（不可被其他管理员降级或删除）
+- **多角色权限**：普通用户可创建/删除自己的 DNS 记录；管理员可访问后台管理所有用户、所有记录和全局设置；管理员可在后台手动创建用户（无需走注册页）
+- **可配置的注册流程**：管理员可在后台开启/关闭注册，选择「邮箱 / GitHub / 邮箱+GitHub」三种方式之一
+- **邮箱后缀白/黑名单**：可同时启用，按后缀匹配（支持子域后缀，如填 `gmail.com` 会同时匹配 `mail.gmail.com`）
+- **邮箱验证码**：启用 Resend 后，邮箱注册需先收到 6 位验证码；未启用时输入邮箱密码直接完成注册
+- **GitHub OAuth 注册**：可限定 GitHub 账号注册最短天数（用 access token 调 `/user` 取 `created_at` 比对，不达标会回滚已创建账号）
+- **多根域名支持**：每个根域名使用独立的 Cloudflare API Token（按 `<域名点换下划线>_CLOUDFLARE_API_TOKEN` 命名），可对应不同 Cloudflare 账户
+- **记录数量上限**：全局 `max_records_per_user` 控制默认每用户可创建 DNS 记录数；管理员可在后台对单个用户覆盖该上限
+- **子域名最小字符长度**：全局 `min_subdomain_length` 限制子域名最短字符数（例如设为 4 时只能用 `1111.example.com` 或更长）
+- **D1 持久化**：用户、会话、DNS 记录归属、验证码、全局设置全部存于 Cloudflare D1
+- **GitHub Actions 一键部署**：CI 自动创建 D1、应用迁移、注入 secrets/vars 并部署 Worker，详见 [部署方法](#部署方法)
 
-- 杩愯鏃讹細Cloudflare Workers锛坄nodejs_compat`锛?- Web 妗嗘灦锛欻ono锛圝SX SSR锛?- 閴存潈锛歜etter-auth锛堥偖绠卞瘑鐮?+ GitHub social provider锛?- 瀛樺偍锛欳loudflare D1锛圫QLite锛?- 閭欢锛歊esend HTTP API锛圵orkers 涓嶆敮鎸?TCP锛屾棤娉曠洿杩?SMTP锛?
-## 鍓嶇疆瑕佹眰
+## 技术栈
+
+- 运行时：Cloudflare Workers（`nodejs_compat`）
+- Web 框架：Hono（JSX SSR）
+- 鉴权：better-auth（邮箱密码 + GitHub social provider）
+- 存储：Cloudflare D1（SQLite）
+- 邮件：Resend HTTP API（Workers 不支持 TCP，无法直连 SMTP）
+
+## 前置要求
 
 - Node.js 18+
 - pnpm
-- Cloudflare 璐︽埛锛屽苟宸叉坊鍔犺嚦灏戜竴涓牴鍩熷悕鍒?Cloudflare DNS
-- 姣忎釜鏍瑰煙鍚嶄竴浠藉叿鏈?DNS 缂栬緫鏉冮檺鐨?Cloudflare API Token
+- Cloudflare 账户，并已添加至少一个根域名到 Cloudflare DNS
+- 每个根域名一份具有 DNS 编辑权限的 Cloudflare API Token
 
-## 鏈湴寮€鍙?
-1. 瀹夎渚濊禆锛?
+## 本地开发
+
+1. 安装依赖：
+
 ```txt
 pnpm install
 ```
 
-2. 鍒涘缓 D1 鏁版嵁搴擄紙棣栨锛夛細
+2. 创建 D1 数据库（首次）：
 
 ```txt
 pnpm wrangler d1 create mc-server-hide-port-tool-db
 ```
 
-灏嗘帶鍒跺彴杩斿洖鐨?`database_id` 濉叆 `wrangler.jsonc` 鐨?`d1_databases[0].database_id` 瀛楁锛堟浛鎹?`REPLACE_WITH_D1_DATABASE_ID`锛夈€?
-3. 搴旂敤杩佺Щ锛?
+将控制台返回的 `database_id` 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id` 字段（替换 `REPLACE_WITH_D1_DATABASE_ID`）。
+
+3. 应用迁移：
+
 ```txt
 pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
 ```
 
-杩佺Щ寤鸿〃娓呭崟锛?- `0000_init.sql` 鈥?better-auth 鐨?`user` / `session` / `account` / `verification` 鍥涘紶琛?- `0001_admin.sql` 鈥?`user` 琛ㄥ姞 `role` 鍒楋紝鏂板 `dns_record` / `settings` / `email_verification` 涓夊紶琛?- `0002_super_admin_and_limits.sql` 鈥?`user` 琛ㄥ姞 `super_admin` / `record_limit` 鍒楋紱`settings` 琛ㄥ姞 `max_records_per_user` / `min_subdomain_length`
+迁移建表清单：
+- `0000_init.sql` — better-auth 的 `user` / `session` / `account` / `verification` 四张表
+- `0001_admin.sql` — `user` 表加 `role` 列，新增 `dns_record` / `settings` / `email_verification` 三张表
+- `0002_super_admin_and_limits.sql` — `user` 表加 `super_admin` / `record_limit` 列；`settings` 表加 `max_records_per_user` / `min_subdomain_length`
 
-4. 澶嶅埗 `.dev.vars.example` 涓?`.dev.vars` 骞跺～鍐欍€傛瘡涓牴鍩熷悕浣跨敤涓€涓嫭绔嬬殑 Cloudflare API Token锛岀幆澧冨彉閲忓悕涓?`<鍩熷悕涓殑鐐规浛鎹负涓嬪垝绾?_CLOUDFLARE_API_TOKEN`锛?
+4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写。每个根域名使用一个独立的 Cloudflare API Token，环境变量名为 `<域名中的点替换为下划线>_CLOUDFLARE_API_TOKEN`：
+
 ```
 example_com_CLOUDFLARE_API_TOKEN=...
 example_net_CLOUDFLARE_API_TOKEN=...
 DOMAINS=["example.com","example.net"]
 BETTER_AUTH_SECRET=openssl rand -base64 32
 BETTER_AUTH_URL=http://localhost:8787
-GITHUB_CLIENT_ID=            # 浠呭綋鍚庡彴閫夋嫨 GitHub 娉ㄥ唽鏂瑰紡鏃堕渶瑕?GITHUB_CLIENT_SECRET=
+GITHUB_CLIENT_ID=            # 仅当后台选择 GitHub 注册方式时需要
+GITHUB_CLIENT_SECRET=
 ```
 
-> 鐢熶骇鐜璇风敤 `wrangler secret put BETTER_AUTH_SECRET` 绛夊懡浠よ缃瘑閽ワ紝鍒囧嬁鍐欏叆 wrangler.jsonc銆?
-5. 鍚姩寮€鍙戞湇鍔″櫒锛?
+> 生产环境请用 `wrangler secret put BETTER_AUTH_SECRET` 等命令设置密钥，切勿写入 wrangler.jsonc。
+
+5. 启动开发服务器：
+
 ```txt
 pnpm dev
 ```
 
-娴忚鍣ㄨ闂?`http://localhost:8787`锛?
-- **棣栨鍚姩**锛坲ser 琛ㄤ负绌猴級鑷姩璺宠浆 `/setup`锛屽垱寤虹涓€涓鐞嗗憳璐︽埛鍚庣洿鎺ョ櫥褰曡繘鍏ヤ富椤?- **鍚庣画鍚姩**鏈櫥褰曞垯璺?`/login`锛岀櫥褰曞悗鏅€氱敤鎴风湅鑷繁鐨?DNS 璁板綍骞跺垱寤?鍒犻櫎锛涚鐞嗗憳棰濆鍙湅鍒般€岀鐞嗗悗鍙般€嶅叆鍙?
-## 閮ㄧ讲鍒扮敓浜?
+浏览器访问 `http://localhost:8787`：
+
+- **首次启动**（user 表为空）自动跳转 `/setup`，创建第一个管理员账户后直接登录进入主页
+- **后续启动**未登录则跳 `/login`，登录后普通用户看自己的 DNS 记录并创建/删除；管理员额外可看到「管理后台」入口
+
+## 部署到生产
+
 ```txt
 pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
 pnpm wrangler secret put example_com_CLOUDFLARE_API_TOKEN
-pnpm wrangler secret put example_net_CLOUDFLARE_API_TOKEN    # 澶氬煙鍚嶉€愪釜 put
+pnpm wrangler secret put example_net_CLOUDFLARE_API_TOKEN    # 多域名逐个 put
 pnpm wrangler secret put BETTER_AUTH_SECRET
-pnpm wrangler secret put GITHUB_CLIENT_ID                    # 鍙€?pnpm wrangler secret put GITHUB_CLIENT_SECRET                # 鍙€?pnpm deploy
+pnpm wrangler secret put GITHUB_CLIENT_ID                    # 可选
+pnpm wrangler secret put GITHUB_CLIENT_SECRET                # 可选
+pnpm deploy
 ```
 
-閮ㄧ讲瀹屾垚鍚庤闂珯鐐逛細杩涘叆 onboarding 娴佺▼锛涘垱寤虹鐞嗗憳鍚庡嵆鍙湪 `/admin` 鍚庡彴閰嶇疆娉ㄥ唽鏂瑰紡 / 閭鐧藉悕鍗?/ Resend / GitHub 璐﹀彿骞撮檺绛夈€?
-## 閮ㄧ讲鏂规硶
+部署完成后访问站点会进入 onboarding 流程；创建管理员后即可在 `/admin` 后台配置注册方式 / 邮箱白名单 / Resend / GitHub 账号年限等。
 
-鏀寔涓ょ閮ㄧ讲鏂瑰紡锛屽彉閲忛敭鍚嶄笌璇︾粏璇存槑璇疯瀵瑰簲鏂囨。锛?
-- **鏂瑰紡涓€锛氭湰鍦板懡浠よ閮ㄧ讲** 鈥?閫傜敤棣栨閮ㄧ讲銆佽皟璇曘€佷笉鏂逛究鐢?CI 鐨勭幆澧冦€傝瑙?[`docs/deploy-local.md`](docs/deploy-local.md)
-- **鏂瑰紡浜岋細GitHub Actions 涓€閿儴缃?*锛堟帹鑽愮敓浜х幆澧冿級鈥?鍦?Actions 椤甸潰鎵嬪姩瑙﹀彂鍗冲彲鑷姩瀹屾垚銆屽垱寤?D1 鈫?瑙ｆ瀽鏍瑰煙鍚?token 鈫?搴旂敤杩佺Щ 鈫?閮ㄧ讲 Worker 鈫?娉ㄥ叆 secrets/vars 鈫?缁戝畾 custom domain銆嶃€傝瑙?[`docs/deploy-github-actions.md`](docs/deploy-github-actions.md)
+## 部署方法
 
-涓ょ鏂瑰紡鐨?*鐩殑涓庢渶缁?Worker 鎷ユ湁鐨勭幆澧冨彉閲忓畬鍏ㄤ竴鑷?*锛屼粎 secret 涓?var 鐨勬潵婧?娉ㄥ叆鏂瑰紡涓嶅悓锛?
-| 鍙橀噺 | 鏈湴閮ㄧ讲 | GitHub Actions 閮ㄧ讲 |
+支持两种部署方式，变量键名与详细说明请见对应文档：
+
+- **方式一：本地命令行部署** — 适用首次部署、调试、不方便用 CI 的环境。详见 [`docs/deploy-local.md`](docs/deploy-local.md)
+- **方式二：GitHub Actions 一键部署**（推荐生产环境）— 在 Actions 页面手动触发即可自动完成「创建 D1 → 解析根域名 token → 应用迁移 → 部署 Worker → 注入 secrets/vars → 绑定 custom domain」。详见 [`docs/deploy-github-actions.md`](docs/deploy-github-actions.md)
+
+两种方式的**目的与最终 Worker 拥有的环境变量完全一致**，仅 secret 与 var 的来源/注入方式不同：
+
+| 变量 | 本地部署 | GitHub Actions 部署 |
 |---|---|---|
-| `APP_NAME` | `wrangler.jsonc.vars` 榛樿 `hide-port-tool` | 鍚屽乏锛孋I 涓嶈鐩?|
-| `DOMAINS` | `wrangler.jsonc.vars` 鎴?`.dev.vars` 涓樉寮忓啓 JSON 鏁扮粍 | 浠?`CLOUDFLARE_DOMAINS_API_TOKEN` 瑙ｆ瀽鍑哄煙鍚嶆竻鍗曡嚜鍔ㄦ淳鐢?|
-| `BETTER_AUTH_URL` | `wrangler.jsonc.vars` 鎴?`.dev.vars` | 浠撳簱 secret `BETTER_AUTH_URL`锛堟槑鏂?var锛夛紱鑻ユ寚鍚戣嚜鏈夊煙鍚嶈嚜鍔ㄧ粦 custom domain |
-| `BETTER_AUTH_SECRET` | `wrangler secret put BETTER_AUTH_SECRET` 鎴?`.dev.vars` | 浠撳簱 secret `BETTER_AUTH_SECRET` |
-| `<鍩熺偣鎹笅鍒掔嚎>_CLOUDFLARE_API_TOKEN` | 姣忔牴鍩熷悕鍚?`wrangler secret put` 鎴?`.dev.vars` 鍗曡 | 浠撳簱 secret `CLOUDFLARE_DOMAINS_API_TOKEN`锛坄<鍩?:<token>,<鍩?:<token>` 姹囨€伙級锛孋I 鎷嗗垎鍚庢寜鍩熷悕閫愪釜娉ㄥ叆 |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | 鍙€?`wrangler secret put` 鎴?`.dev.vars` | 浠撳簱鍚屽悕 secret锛屾湭璁剧疆鍒?CI 鑷姩璺宠繃 |
+| `APP_NAME` | `wrangler.jsonc.vars` 默认 `hide-port-tool` | 同左，CI 不覆盖 |
+| `DOMAINS` | `wrangler.jsonc.vars` 或 `.dev.vars` 中显式写 JSON 数组 | 从 `CLOUDFLARE_DOMAINS_API_TOKEN` 解析出域名清单自动派生 |
+| `BETTER_AUTH_URL` | `wrangler.jsonc.vars` 或 `.dev.vars` | 仓库 secret `BETTER_AUTH_URL`（明文 var）；若指向自有域名自动绑 custom domain |
+| `BETTER_AUTH_SECRET` | `wrangler secret put BETTER_AUTH_SECRET` 或 `.dev.vars` | 仓库 secret `BETTER_AUTH_SECRET` |
+| `<域点换下划线>_CLOUDFLARE_API_TOKEN` | 每根域名各 `wrangler secret put` 或 `.dev.vars` 单行 | 仓库 secret `CLOUDFLARE_DOMAINS_API_TOKEN`（`<域>:<token>,<域>:<token>` 汇总），CI 拆分后按域名逐个注入 |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | 可选 `wrangler secret put` 或 `.dev.vars` | 仓库同名 secret，未设置则 CI 自动跳过 |
 
-> 瀹屾暣瀛楁璇存槑銆佸懡浠ら『搴忋€侀闄╀笌绀轰緥璇烽槄瀵瑰簲鏂囨。銆?
-## 绠＄悊鍚庡彴鍔熻兘锛坄/admin`锛?
-浠?`role=admin` 鐨勭敤鎴峰彲璁块棶锛屾櫘閫氱敤鎴疯闂細琚噸瀹氬悜鍒?`/`銆?
-| 妯″潡 | 璇存槑 |
+> 完整字段说明、命令顺序、风险与示例请阅对应文档。
+
+## 管理后台功能（`/admin`）
+
+仅 `role=admin` 的用户可访问，普通用户访问会被重定向到 `/`。
+
+| 模块 | 说明 |
 |---|---|
-| 娉ㄥ唽璁剧疆 | 寮€鍏虫敞鍐屻€侀€夋嫨妯″紡锛堥偖绠?GitHub/閭+GitHub锛夈€丟itHub 璐﹀彿鏈€鐭敞鍐屽ぉ鏁?|
-| 閭鍚庣紑鐧?榛戝悕鍗?| 鐙珛寮€鍏?+ 鍚庣紑鍒楄〃锛堥€楀彿鍒嗛殧锛夛紝瀛愬煙鍚庣紑鑷姩鍖归厤 |
-| 閭欢鏈嶅姟锛圧esend锛?| 寮€鍏炽€丄PI Key锛堢暀绌轰繚鐣欐棦鏈夊€硷級銆佸彂浠朵汉鍦板潃锛涘惎鐢ㄥ悗閭娉ㄥ唽璧?6 浣嶉獙璇佺爜娴佺▼ |
-| 鐢ㄦ埛绠＄悊 | 鍒楀嚭鎵€鏈夌敤鎴枫€佽涓虹鐞嗗憳/闄嶇骇銆佸垹闄わ紙绾ц仈鍒犻櫎鍏?DNS 璁板綍鍜屼細璇濓級锛涙墜鍔ㄥ垱寤虹敤鎴凤紙鏃犻渶娉ㄥ唽椤碉級锛涢€愮敤鎴疯缃?DNS 璁板綍鏁颁笂闄?|
-| 瓒呯骇绠＄悊鍛?| 棣栦釜 onboarding 鍒涘缓鐨勭敤鎴疯鏍囪涓鸿秴绾х鐞嗗憳锛屾櫘閫氱鐞嗗憳鏃犳硶闄嶇骇鎴栧垹闄?|
-| 璁板綍鏁颁笂闄?| 鍏ㄥ眬 `max_records_per_user` 鎺у埗榛樿涓婇檺锛涘彲瀵瑰崟涓敤鎴疯鐩?|
-| 瀛愬煙鍚嶆渶灏忛暱搴?| 鍏ㄥ眬 `min_subdomain_length` 鎺у埗瀛愬煙鍚嶆渶鐭瓧绗︽暟 |
-| DNS 璁板綍绠＄悊 | 鍒楀嚭鍏ㄧ珯鎵€鏈?DNS 璁板綍銆佸垹闄ゅ崟鏉★紙鍚屾鍒犻櫎 Cloudflare 涓?A/AAAA/CNAME + SRV 璁板綍锛?|
+| 注册设置 | 开关注册、选择模式（邮箱/GitHub/邮箱+GitHub）、GitHub 账号最短注册天数 |
+| 邮箱后缀白/黑名单 | 独立开关 + 后缀列表（逗号分隔），子域后缀自动匹配 |
+| 邮件服务（Resend） | 开关、API Key（留空保留既有值）、发件人地址；启用后邮箱注册走 6 位验证码流程 |
+| 用户管理 | 列出所有用户、设为管理员/降级、删除（级联删除其 DNS 记录和会话）；手动创建用户（无需注册页）；逐用户设置 DNS 记录数上限 |
+| 超级管理员 | 首个 onboarding 创建的用户被标记为超级管理员，普通管理员无法降级或删除 |
+| 记录数上限 | 全局 `max_records_per_user` 控制默认上限；可对单个用户覆盖 |
+| 子域名最小长度 | 全局 `min_subdomain_length` 控制子域名最短字符数 |
+| DNS 记录管理 | 列出全站所有 DNS 记录、删除单条（同步删除 Cloudflare 中 A/AAAA/CNAME + SRV 记录） |
 
-## 绫诲瀷鐢熸垚
+## 类型生成
 
-淇敼 `wrangler.jsonc` 鎴?`.dev.vars` 鍚庤閲嶆柊鐢熸垚绫诲瀷锛?
+修改 `wrangler.jsonc` 或 `.dev.vars` 后请重新生成类型：
+
 ```txt
 pnpm cf-typegen
 ```
 
-`wrangler types` 浼氳嚜鍔ㄦ壂鎻?`.dev.vars` 灏嗗叾涓殑鍙橀噺娉ㄥ叆 `CloudflareBindings`锛屼緥濡?`303302_xyz_CLOUDFLARE_API_TOKEN` 浼氫互瀛楅潰閲?key 褰㈠紡鍑虹幇鍦?interface 涓€備唬鐮佷腑閫氳繃 `(env as Record<string, string|undefined>)[key]` 鍔ㄦ€佽鍙栵紝鏃犻渶鍏虫敞绫诲瀷缁嗚妭銆?
-瀹炰緥鍖?Hono 鏃朵娇鐢細
+`wrangler types` 会自动扫描 `.dev.vars` 将其中的变量注入 `CloudflareBindings`，例如 `303302_xyz_CLOUDFLARE_API_TOKEN` 会以字面量 key 形式出现在 interface 中。代码中通过 `(env as Record<string, string|undefined>)[key]` 动态读取，无需关注类型细节。
+
+实例化 Hono 时使用：
 
 ```ts
 // src/index.tsx
 const app = new Hono<{ Bindings: CloudflareBindings }>()
 ```
 
-## 椤圭洰缁撴瀯
+## 项目结构
 
 ```
 migrations/
-  0000_init.sql                       # better-auth 鍩虹琛?  0001_admin.sql                      # admin 鍚庡彴鎵€闇€琛?+ 瑙掕壊瀛楁
-  0002_super_admin_and_limits.sql     # 瓒呯骇绠＄悊鍛?+ 璁板綍涓婇檺 + 瀛愬煙鍚嶆渶灏忛暱搴?src/
-  auth.ts                             # better-auth 瀹炰緥 + 閴存潈 helper
-  index.tsx                           # Hono 璺敱 + Cloudflare API 灏佽
+  0000_init.sql                       # better-auth 基础表
+  0001_admin.sql                      # admin 后台所需表 + 角色字段
+  0002_super_admin_and_limits.sql     # 超级管理员 + 记录上限 + 子域名最小长度
+src/
+  auth.ts                             # better-auth 实例 + 鉴权 helper
+  index.tsx                           # Hono 路由 + Cloudflare API 封装
   services/
-    settings.ts                       # D1 settings 鍗曡璇诲啓 + 閭鐧?榛戝悕鍗曟牎楠?    dns-records.ts                    # DNS 璁板綍褰掑睘琛?CRUD + 鐢ㄦ埛绠＄悊 + 闄愰 helpers
-    mailer.ts                         # Resend HTTP API 鍙戦€侀獙璇佺爜
-    github.ts                         # 璋冪敤 GitHub /user 鍙?created_at 鏍￠獙
+    settings.ts                       # D1 settings 单行读写 + 邮箱白/黑名单校验
+    dns-records.ts                    # DNS 记录归属表 CRUD + 用户管理 + 限额 helpers
+    mailer.ts                         # Resend HTTP API 发送验证码
+    github.ts                         # 调用 GitHub /user 取 created_at 校验
   views/
-    Layout.tsx                        # 閫氱敤 HTML 澶栧３
-    SetupView.tsx                     # 棣栨 onboarding
+    Layout.tsx                        # 通用 HTML 外壳
+    SetupView.tsx                     # 首次 onboarding
     LoginView.tsx
-    RegisterView.tsx                  # 鎸?settings.registration_mode 鍔ㄦ€佹覆鏌?    VerifyEmailView.tsx               # 楠岃瘉鐮佽緭鍏?    IndexView.tsx                     # 鏅€氱敤鎴蜂富椤碉紙鍚嚜宸辩殑璁板綍鍒楄〃锛?    AdminView.tsx                     # 绠＄悊鍚庡彴锛堣缃?鐢ㄦ埛/DNS 璁板綍涓夊悎涓€锛?public/static/
-  main.js                             # 棣栭〉 DNS 琛ㄥ崟浜や簰锛坒etch /api/domains, /api/create-dns锛?scripts/
-  resolve_env_keys.py                 # 瑙ｆ瀽 .dev.vars.example 鍖哄垎 secret/var 閿悕
+    RegisterView.tsx                  # 按 settings.registration_mode 动态渲染
+    VerifyEmailView.tsx               # 验证码输入
+    IndexView.tsx                     # 普通用户主页（含自己的记录列表）
+    AdminView.tsx                     # 管理后台（设置/用户/DNS 记录三合一）
+public/static/
+  main.js                             # 首页 DNS 表单交互（fetch /api/domains, /api/create-dns）
+scripts/
+  resolve_env_keys.py                 # 解析 .dev.vars.example 区分 secret/var 键名
 .github/workflows/
-  deploy.yml                          # CI锛氳嚜鍔ㄥ垱寤?D1 + 杩佺Щ + 閮ㄧ讲 + 娉ㄥ叆 secrets
+  deploy.yml                          # CI：自动创建 D1 + 迁移 + 部署 + 注入 secrets
 docs/
-  deploy-github-actions.md            # GitHub Actions 閮ㄧ讲璇︾粏璇存槑
+  deploy-github-actions.md            # GitHub Actions 部署详细说明
 ```
