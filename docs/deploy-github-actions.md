@@ -35,7 +35,9 @@
 
 > 关于 secret 命名：`*_CLOUDFLARE_API_TOKEN` 类键在 GitHub env 中需把 `CLOUDFLARE_API_TOKEN` 前置（避免数字开头），例：`303302_xyz_CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_API_TOKEN_303302_XYZ`；其余键直接全大写。映射由 `scripts/resolve_env_keys.py` 自动处理。
 
-**BETTER_AUTH_URL 自动绑定 custom domain**：CI 部署后会读取 `BETTER_AUTH_URL`，若指向非 `*.workers.dev` 的自定义主机名，会自动调用 Cloudflare API 把它绑定为 `hide-port-tool` worker 的 custom domain（要求该域名已托管在同一 Cloudflare 账户）。指向 workers.dev 或未配置 zone 时会安全跳过。
+**BETTER_AUTH_URL 自动绑定 custom domain**：CI 部署前会解析 `BETTER_AUTH_URL` 主机名，写入 `wrangler.jsonc` 的 `routes: [{ pattern, custom_domain: true }]`，由 `wrangler deploy` 自动创建 custom domain（含 DNS 与证书）。指向 workers.dev 或未配置时安全跳过。
+
+**vars / secrets 注入**：CI 使用 wrangler-action 内置的 `vars` / `secrets` 字段（每行一个变量名），值通过同一步的 `env:` 提供。`wrangler deploy` 时把 vars 作为 `--var` 注入，secrets 走 `wrangler secret bulk` 注入，无需手工 put 与循环。
 
 ## 流程
 

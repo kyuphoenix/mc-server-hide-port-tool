@@ -13,21 +13,6 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # .dev.vars.example 里的每个键 K，GitHub secret 按「字段名前置」规则命名：
-    #   example1_com_CLOUDFLARE_API_TOKEN  ->  CLOUDFLARE_API_TOKEN_EXAMPLE1_COM
-    #   303302_xyz_CLOUDFLARE_API_TOKEN    ->  CLOUDFLARE_API_TOKEN_303302_XYZ   （数字段不开头）
-    #   DOMAINS                            ->  DOMAINS
-    #   BETTER_AUTH_URL                    ->  BETTER_AUTH_URL
-    # 不再加任何前缀，本地与 CI 键名一一对应。
-    env:
-      CLOUDFLARE_API_TOKEN_EXAMPLE1_COM: ${{ secrets.CLOUDFLARE_API_TOKEN_EXAMPLE1_COM }}
-      CLOUDFLARE_API_TOKEN_EXAMPLE2_COM: ${{ secrets.CLOUDFLARE_API_TOKEN_EXAMPLE2_COM }}
-      DOMAINS: ${{ secrets.DOMAINS }}
-      BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-      BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-      GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-      GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,203 +30,44 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Resolve env keys from .dev.vars.example
-        id: envkeys
-        run: |
-          set -euo pipefail
-          out="$(python scripts/resolve_env_keys.py)"
-          secret_keys="$(printf '%s' "$out" | sed -n '1p')"
-          var_keys="$(printf '%s' "$out" | sed -n '2p')"
-          {
-            echo "secret_keys=$secret_keys"
-            echo "var_keys=$var_keys"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Patch wrangler.jsonc with plaintext vars
+      # 一次性部署：D1 写回 + custom domain patch + 应用迁移 + deploy + 注入 secrets/vars
+      # .dev.vars.example 里的键名 → GitHub env 名映射规则（与 scripts/resolve_env_keys.py 一致）：
+      #   *_CLOUDFLARE_API_TOKEN   ->  CLOUDFLARE_API_TOKEN_<域名大写>（避免数字开头）
+      #   DOMAINS / BETTER_AUTH_URL -> 同名大写
+      # secrets 与 vars 字段每行只写「变量名」，对应的值通过该 step 的 env: 提供。
+      - name: Deploy Worker (vars + secrets + migrations)
+        uses: cloudflare/wrangler-action@v3
         env:
-          VAR_KEYS: ${{ steps.envkeys.outputs.var_keys }}
-        run: |
-          set -euo pipefail
-          node - <<'NODE'
-          const fs = require('fs');
-          const path = 'wrangler.jsonc';
-          const raw = fs.readFileSync(path, 'utf8');
-          const strip = raw
-            .replace(/\/\/.*$/gm, '')
-            .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/,(\s*[}\]])/g, '$1');
-          const cfg = JSON.parse(strip);
-          cfg.vars = cfg.vars || {};
-
-          const varKeys = (process.env.VAR_KEYS || '').split(',').filter(Boolean);
-          for (const key of varKeys) {
-            const envName = key.toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-            const val = process.env[envName];
-            if (!val) {
-              console.error(`[warn] missing env ${envName} for var ${key}`);
-              continue;
-            }
-            let parsed = val;
-            try { parsed = JSON.parse(val); } catch {}
-            cfg.vars[key] = parsed;
-            console.log(`vars.${key} = ${typeof parsed === 'string' ? '<string>' : JSON.stringify(parsed)}`);
-          }
-
-          fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
-          NODE
-
-      - name: Ensure D1 database exists & write back database_id
-        env:
+          # ---- Cloudflare 部署凭据（wrangler 用）----
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          DB_NAME="hide-port-tool-db"
-
-          echo "查询现有 D1 数据库…"
-          list_json="$(curl -sS \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database")"
-
-          if ! echo "$list_json" | jq -e '.success' > /dev/null; then
-            echo "D1 list API 调用失败：$list_json"
-            exit 1
-          fi
-
-          db_id="$(echo "$list_json" | jq -r --arg name "$DB_NAME" \
-            '.result[] | select(.name == $name) | .uuid' | head -n1)"
-
-          if [ -z "$db_id" ] || [ "$db_id" = "null" ]; then
-            echo "数据库 $DB_NAME 不存在，开始创建…"
-            create_json="$(curl -sS -X POST \
-              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "{\"name\":\"$DB_NAME\"}" \
-              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database")"
-            if ! echo "$create_json" | jq -e '.success' > /dev/null; then
-              echo "D1 创建失败：$create_json"
-              exit 1
-            fi
-            db_id="$(echo "$create_json" | jq -r '.result.uuid')"
-            echo "数据库已创建，uuid = $db_id"
-          else
-            echo "数据库已存在，uuid = $db_id"
-          fi
-
-          # 写回 wrangler.jsonc 的 d1_databases[0].database_id
-          node - "$db_id" <<'NODE'
-          const fs = require('fs');
-          const id = process.argv[2];
-          const path = 'wrangler.jsonc';
-          const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
-          if (!Array.isArray(cfg.d1_databases) || cfg.d1_databases.length === 0) {
-            console.error('wrangler.jsonc 缺少 d1_databases 配置');
-            process.exit(1);
-          }
-          cfg.d1_databases[0].database_id = id;
-          fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
-          console.log('已更新 wrangler.jsonc: d1_databases[0].database_id =', id);
-          NODE
-        id: ensure_d1
-
-      - name: Apply migrations (remote)
-        uses: cloudflare/wrangler-action@v3
+          # ---- vars（明文，注入为 Worker 普通环境变量）----
+          DOMAINS: ${{ secrets.DOMAINS }}
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+          # ---- secrets（敏感，注入为 Worker 加密环境变量）----
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          # 业务变量名映射（wrangler-action 按名字取本 step 的 env）
+          example1_com_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_EXAMPLE1_COM }}
+          example2_com_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_EXAMPLE2_COM }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 migrations apply hide-port-tool-db --remote
-
-      - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # 先写回 d1 的 database_id（若不存在则远端创建），再 patch custom domain routes，
+          # 再远端应用迁移，最后部署（部署会一并创建 custom domain）
+          preCommands: |
+            node scripts/ensure-d1-and-writeback.cjs
+            node scripts/patch-custom-domain.cjs
+            npx wrangler d1 migrations apply hide-port-tool-db --remote
           command: deploy --minify
-
-      - name: Put secrets by name
-        if: ${{ steps.envkeys.outputs.secret_keys != '' }}
-        env:
-          SECRET_KEYS: ${{ steps.envkeys.outputs.secret_keys }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          for key in $SECRET_KEYS; do
-            env_name="$(python scripts/resolve_env_keys.py "$key")"
-            # 用 eval 安全取值，规避 set -u 下未定义变量报错
-            val="$(eval "echo \"\${${env_name}:-}\"")"
-            if [ -z "$val" ]; then
-              echo "[warn] 跳过 $key：对应 env $env_name 未设置或为空"
-              continue
-            fi
-            printf '%s' "$val" | npx wrangler secret put "$key"
-          done
-
-      - name: Bind BETTER_AUTH_URL as Worker custom domain
-        env:
-          AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          if [ -z "$AUTH_URL" ]; then
-            echo "BETTER_AUTH_URL 未设置，跳过 custom domain 绑定。"
-            exit 0
-          fi
-
-          hostname="$(python -c "
-          import sys, re
-          from urllib.parse import urlparse
-          u = (sys.argv[1] or '').strip()
-          if not re.match(r'^[a-zA-Z]+://', u):
-              u = 'https://' + u
-          p = urlparse(u)
-          h = (p.hostname or '').lower()
-          print(h)
-          " "$AUTH_URL")"
-
-          if [ -z "$hostname" ]; then
-            echo "[warn] 无法从 BETTER_AUTH_URL=$AUTH_URL 解析主机名，跳过。"
-            exit 0
-          fi
-
-          # workers.dev 子域无需绑定 custom domain
-          if [[ "$hostname" == *.workers.dev ]]; then
-            echo "解析到的主机名 $hostname 是 workers.dev 子域，无需绑定 custom domain，跳过。"
-            exit 0
-          fi
-
-          # 必须有对应的 zone 才能绑 custom domain
-          zone_id="$(curl -sS \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.cloudflare.com/client/v4/zones?name=$(printf '%s' "$hostname" | sed 's/^https\?:\/\///')")"
-
-          zone_id="$(echo "$zone_id" | jq -r --arg host "$hostname" '
-            .result[] | select(.name | . as $z | $host == $z or $host | endswith("." + $z)) | .id' | head -n1)"
-
-          if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then
-            echo "[warn] 未找到 $hostname 对应的 Cloudflare zone，跳过 custom domain 绑定。请先把该域名加入 Cloudflare。"
-            exit 0
-          fi
-
-          echo "将为 Worker hide-port-tool 绑定 custom domain: $hostname (zone=$zone_id)"
-          resp="$(curl -sS -X PUT \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data "{\"hostname\":\"$hostname\",\"zone_id\":\"$zone_id\",\"service\":\"hide-port-tool\"}" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/domains")"
-
-          if echo "$resp" | jq -e '.success' > /dev/null; then
-            echo "✅ custom domain 已绑定/已存在：$(echo "$resp" | jq -r '.result.hostname // .result.env_zone_id // "?"')"
-          else
-            # 已存在的 custom domain 也会返回 1003 等错误，但通常仍属于成功状态
-            err_msg="$(echo "$resp" | jq -r '.errors[0].message // "?"')"
-            if echo "$err_msg" | grep -qi "already" || echo "$resp" | grep -qi "duplicate"; then
-              echo "ℹ️ custom domain 已存在：$hostname"
-            else
-              echo "❌ 绑定失败：$resp"
-              exit 1
-            fi
-          fi
+          # 每行一个变量名（不是 key=value），值已在 env: 中按同名提供
+          vars: |
+            DOMAINS
+            BETTER_AUTH_URL
+          secrets: |
+            BETTER_AUTH_SECRET
+            GITHUB_CLIENT_ID
+            GITHUB_CLIENT_SECRET
+            example1_com_CLOUDFLARE_API_TOKEN
+            example2_com_CLOUDFLARE_API_TOKEN
