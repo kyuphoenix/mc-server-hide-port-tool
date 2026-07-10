@@ -17,10 +17,10 @@
 
 | Secret 名 | 是否敏感 | 说明 |
 |---|---|---|
-| `DOMAINS` | ❌ 明文 var | JSON 数组字符串，如 `["303302.xyz","example.com"]` |
+| `DOMAINS`（可选） | ❌ 明文 var | 仅作一致性校验参考；若未设，CI 自动从 `CLOUDFLARE_DOMAINS_API_TOKEN` 解析域名清单覆盖到 worker 的 `DOMAINS` 变量 |
 | `BETTER_AUTH_URL` | ❌ 明文 var | worker 对外访问 URL；若指向非 `*.workers.dev` 的自有域名，CI 会自动把它作为 custom domain 绑定到 worker |
 | `BETTER_AUTH_SECRET` | ✅ secret | better-auth 会话签名密钥 |
-| `CLOUDFLARE_DOMAINS_API_TOKEN` | ✅ secret | 汇总所有根域名 Cloudflare API Token 的单变量，格式见下方 |
+| `CLOUDFLARE_DOMAINS_API_TOKEN` | ✅ secret | 汇总所有根域名 Cloudflare API Token 的单变量，格式见下方；同时也是 worker `DOMAINS` 域名清单的来源 |
 | `GITHUB_CLIENT_ID` | ✅ secret（可选） | 仅在后台开启 GitHub 注册时需要，未设置则 CI 自动跳过 |
 | `GITHUB_CLIENT_SECRET` | ✅ secret（可选） | 同上 |
 
@@ -43,13 +43,16 @@ CI 会探测每个 secret 是否非空，未配置的会自动跳过，不会因
 - `:` 之后是 Cloudflare API Token，需具有该域名 DNS 编辑权限。
 - 域名之间用英文逗号 `,` 分隔。
 
-CI 会用 `scripts/parse_domain_tokens.py` 解析，再在 `postCommands` 中用 `scripts/put_domain_secrets.py` 把每个 token 以 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`（小写）的 secret 名循环 `wrangler secret put` 注入到 Worker，与运行时代码读取的命名一致。
+CI 会用 `scripts/parse_domain_tokens.py` 解析，做两件事：
+1. 在 `postCommands` 中用 `scripts/put_domain_secrets.py` 把每个 token 以 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`（小写）的 secret 名循环 `wrangler secret put` 注入到 Worker，与运行时代码读取的命名一致。
+2. 把解析出的域名清单覆盖到 worker 的 `DOMAINS` 普通环境变量——无需再单独设置 `DOMAINS` secret。
 
-> **必须保证 `DOMAINS` 中列出的每个根域名都出现在 `CLOUDFLARE_DOMAINS_API_TOKEN` 中**；缺漏会让该域名创建 DNS 记录时找不到 token 而失败，CI 会在日志里给出明确警告。
+> 若额外设置了 `DOMAINS` secret，仅作为一致性校验参考：CI 会检查 `CLOUDFLARE_DOMAINS_API_TOKEN` 是否包含其列出的所有域名，缺漏会在日志警告。
+> **最终运行期的 `DOMAINS` 列表里每个根域名都必须有对应 token**，否则该域名创建 DNS 记录时找不到 token 而失败，CI 会在日志里给出明确警告。
 
 ### 新增根域名
 
-把新域名加进 `DOMAINS`，再把对应的 Token 拼接到 `CLOUDFLARE_DOMAINS_API_TOKEN` 末尾（`,` 分隔），无需改 workflow 或加新 secret。
+把对应「`<域名>:<Token>`」拼接到 `CLOUDFLARE_DOMAINS_API_TOKEN` 末尾（`,` 分隔），CI 会自动把新域名加入 worker 的 `DOMAINS` 变量，无需改 workflow 或加新 secret。
 
 ## 流程
 

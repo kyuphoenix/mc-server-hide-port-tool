@@ -146,10 +146,10 @@ pnpm deploy
 
 | GitHub Secret 名 | 是否敏感 | 说明 |
 |---|---|---|
-| `DOMAINS` | ❌ 明文 var | JSON 数组字符串，如 `["303302.xyz","example.com"]` |
+| `DOMAINS`（可选） | ❌ 明文 var | 仅作一致性校验参考；若未设，CI 自动从 `CLOUDFLARE_DOMAINS_API_TOKEN` 解析域名清单覆盖到 worker 的 `DOMAINS` 变量 |
 | `BETTER_AUTH_URL` | ❌ 明文 var | worker 对外访问 URL；若指向非 `*.workers.dev` 的自有域名，CI 会把它作为 custom domain 自动绑定到 worker |
 | `BETTER_AUTH_SECRET` | ✅ secret | better-auth 会话签名密钥 |
-| `CLOUDFLARE_DOMAINS_API_TOKEN` | ✅ secret | **汇总所有根域名 Cloudflare API Token 的单一变量**，格式见下 |
+| `CLOUDFLARE_DOMAINS_API_TOKEN` | ✅ secret | **汇总所有根域名 Cloudflare API Token 的单一变量**，格式见下；同时也是 worker `DOMAINS` 域名清单的来源 |
 | `GITHUB_CLIENT_ID` | ✅ secret（可选） | 仅在后台开启 GitHub 注册时需要，未设置则自动跳过 |
 | `GITHUB_CLIENT_SECRET` | ✅ secret（可选） | 同上，未设置则自动跳过 |
 
@@ -168,11 +168,14 @@ pnpm deploy
 303302.xyz:abc123_your_token_here,example.com:def456_your_token_here
 ```
 
-每个域名前的 `:` 切分为「域名:token」，域名后保留原样小写。CI 解析后，将每个 token 以 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`（小写）的 secret 名注入到 Worker（与运行时代码读取的命名一致）。例如 `303302.xyz` 对应 worker 内 `303302_xyz_CLOUDFLARE_API_TOKEN`。
+每个域名前的 `:` 切分为「域名:token」，域名后保留原样小写。CI 解析后做两件事：
+1. 把每个 token 以 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`（小写）的 secret 名注入到 Worker（与运行时代码读取的命名一致）。例如 `303302.xyz` 对应 worker 内 `303302_xyz_CLOUDFLARE_API_TOKEN`。
+2. 把解析出的域名清单覆盖到 worker 的 `DOMAINS` 普通环境变量（无需单独设置 `DOMAINS` secret）。
 
-> **必须保证 `DOMAINS` 列出的每个根域名都出现在 `CLOUDFLARE_DOMAINS_API_TOKEN` 中**，否则该域名创建 DNS 记录时会因找不到 token 而失败。CI 会在日志中警告缺漏。
+> 若额外设置了 `DOMAINS` secret，仅作为一致性校验参考：CI 会检查 `CLOUDFLARE_DOMAINS_API_TOKEN` 中是否包含 `DOMAINS` 列出的所有域名，缺漏会在日志警告。
+> **必须保证最终运行期的 `DOMAINS` 列表里每个根域名都有对应 token**，否则该域名创建 DNS 记录时会因找不到 token 而失败。
 
-**新增根域名时**：把新域名加进 `DOMAINS`，再把它对应的 Token 拼接到 `CLOUDFLARE_DOMAINS_API_TOKEN` 末尾（`,` 分隔）即可，无需改动 workflow。
+**新增根域名时**：把它对应的「`<域名>:<Token>`」拼接到 `CLOUDFLARE_DOMAINS_API_TOKEN` 末尾（`,` 分隔）即可，CI 会自动把新域名加入 worker 的 `DOMAINS` 变量，无需单独改 `DOMAINS` secret 或 workflow。
 
 详见 [`docs/deploy-github-actions.md`](docs/deploy-github-actions.md)。
 

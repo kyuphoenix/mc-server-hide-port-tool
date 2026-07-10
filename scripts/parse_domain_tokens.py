@@ -11,6 +11,8 @@
 输出（stdout）：
     line 1: 逗号分隔的 wrangler secret 名列表（已配置的非空 token）
     line 2: JSON 对象，键=wrangler secret 名，值=token
+    line 3: JSON 数组字符串，从 CLOUDFLARE_DOMAINS_API_TOKEN 解析出的域名列表
+            （可直接覆盖到 worker 的 DOMAINS 变量）
 """
 from __future__ import annotations
 import argparse
@@ -84,9 +86,14 @@ def main() -> int:
         print(f"[warn] CLOUDFLARE_DOMAINS_API_TOKEN 含 DOMAINS 未列出的域名："
               f"{', '.join(extra)}（仍会注入）", file=sys.stderr)
 
-    # stdout: line 1 名单，line 2 JSON
+    # stdout:
+    #   line 1: 逗号分隔的 wrangler secret 名列表
+    #   line 2: JSON 对象，键=wrangler secret 名，值=token
+    #   line 3: JSON 数组字符串，从 CLOUDFLARE_DOMAINS_API_TOKEN 解析出的域名列表
+    #           （可直接覆盖到 worker 的 DOMAINS 变量）
     print(",".join(sorted(secret_map.keys())))
     print(json.dumps(secret_map, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(list(seen.keys()), ensure_ascii=False))
     return 0
 
 
