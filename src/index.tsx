@@ -23,10 +23,16 @@ import {
   listAllUsers,
   findUserById,
   setUserRole,
-  deleteUserCascade,
+  setUserRecordLimit,
+  setSuperAdmin,
+  isSuperAdmin,
   countUsers,
+  countRecordsByUser,
+  resolveRecordLimit,
+  deleteUserCascade,
   genId,
-  type DnsRecordRow
+  type DnsRecordRow,
+  type UserListRow
 } from './services/dns-records'
 import { sendVerificationCode } from './services/mailer'
 import { getGitHubUser, meetsAgeRequirement } from './services/github'
@@ -92,9 +98,22 @@ app.all('/api/auth/*', (c) => {
   return auth.handler(c.req.raw)
 })
 
-app.get('/api/domains', (c) => {
+app.get('/api/domains', async (c) => {
   const domains = getAllowedDomains(c.env)
-  return c.json({ success: true, domains })
+  const settings = await getSettings(c.env.DB)
+  const session = await getCurrentSession(c.env, c.req.raw.headers)
+  let recordLimit: number | null = null
+  if (session) {
+    const userRow = await findUserById(c.env.DB, session.user.id)
+    recordLimit = resolveRecordLimit(userRow?.record_limit ?? null, settings.max_records_per_user)
+  }
+  return c.json({
+    success: true,
+    domains,
+    min_subdomain_length: settings.min_subdomain_length,
+    record_limit: recordLimit,
+    max_records_per_user: settings.max_records_per_user
+  })
 })
 
 app.post('/api/create-dns', async (c) => {
@@ -124,6 +143,39 @@ app.post('/api/create-dns', async (c) => {
         { success: false, message: `后端未配置根域名 ${rootDomain} 对应的 CLOUDFLARE_API_TOKEN` },
         500
       )
+    }
+
+    // 子域名最小长度校验
+    const settings = await getSettings(c.env.DB)
+    const minLen = Math.max(0, settings.min_subdomain_length)
+    // subdomain 可包含多级如 play.mc，整体长度按用户填写的子域名原始字符串判断
+    const subdomainInput = String((body as Record<string, unknown>).subdomain ?? '').trim()
+    if (minLen > 0 && subdomainInput.length < minLen) {
+      return c.json(
+        {
+          success: false,
+          message: `子域名长度不能少于 ${minLen} 个字符`
+        },
+        400
+      )
+    }
+
+    // 记录数上限校验
+    const userRecordLimit = resolveRecordLimit(
+      (session.user as any).record_limit as number | null | undefined,
+      settings.max_records_per_user
+    )
+    if (userRecordLimit > 0) {
+      const currentCount = await countRecordsByUser(c.env.DB, userId)
+      if (currentCount >= userRecordLimit) {
+        return c.json(
+          {
+            success: false,
+            message: `已达记录数量上限（${userRecordLimit} 条），无法继续创建`
+          },
+          403
+        )
+      }
     }
 
     const hostName = `${subdomain}.${rootDomain}`
@@ -247,11 +299,12 @@ app.post('/setup', async (c) => {
         { status: signUpRes.status as 400 | 422 }
       )
     }
-    // 把该用户提升为管理员
+    // 把该用户提升为管理员，并标记为超级管理员（首个创建的用户）
     const listRes = await listAllUsers(c.env.DB)
     const newUser = listRes.find((u) => u.email === email)
     if (newUser) {
       await setUserRole(c.env.DB, newUser.id, 'admin')
+      await setSuperAdmin(c.env.DB, newUser.id, true)
     }
     // 自动登录
     const signInRes = await auth.api.signInEmail({
@@ -574,7 +627,7 @@ app.get('/register/github/done', async (c) => {
 })
 
 // ---------- 退出 ----------
-app.post('/logout', async (c) => {
+app.on(['GET', 'POST'], '/logout', async (c) => {
   const auth = createAuth(c.env)
   try {
     const res = await auth.api.signOut({ headers: c.req.raw.headers, asResponse: true })
@@ -583,8 +636,6 @@ app.post('/logout', async (c) => {
     return c.redirect('/login')
   }
 })
-
-app.get('/logout', (c) => c.redirect('/login'))
 
 // ---------- 普通用户删除自己的记录 ----------
 app.post('/dns/:id/delete', async (c) => {
@@ -611,7 +662,13 @@ app.get('/admin', async (c) => {
   ])
   return c.html(
     <Layout title="管理后台">
-      <AdminView users={users} records={records} settings={settings} currentUserId={user.id} />
+      <AdminView
+        users={users}
+        records={records}
+        settings={settings}
+        currentUserId={user.id}
+        createError={c.req.query('create_error') ?? undefined}
+      />
     </Layout>
   )
 })
@@ -639,7 +696,9 @@ app.post('/admin/settings', async (c) => {
     email_blacklist_suffixes: splitCsv(blacklistSuffixesRaw),
     github_min_account_age_days: Math.max(0, Number(form.get('github_min_account_age_days') ?? 0) || 0),
     resend_enabled: form.get('resend_enabled') === 'on',
-    resend_from: String(form.get('resend_from') ?? '').trim() || null
+    resend_from: String(form.get('resend_from') ?? '').trim() || null,
+    max_records_per_user: Math.max(0, Number(form.get('max_records_per_user') ?? 0) || 0),
+    min_subdomain_length: Math.max(0, Number(form.get('min_subdomain_length') ?? 0) || 0)
   }
   // API Key 留空则保留既有
   if (resendApiKeyFromForm) {
@@ -657,8 +716,9 @@ app.post('/admin/users/:id/role', async (c) => {
   if (!admin) return c.redirect('/')
   const id = c.req.param('id')
   if (id === admin.id) return c.redirect('/admin')
-  const role = String(c.req.query('role') ?? '')
-  // 从表单字段读
+  // 超级管理员不能被其他管理员降级
+  const targetSuper = await isSuperAdmin(c.env.DB, id)
+  if (targetSuper) return c.redirect('/admin')
   const form = await c.req.formData()
   const roleFromForm = String(form.get('role') ?? '')
   if (roleFromForm === 'admin' || roleFromForm === 'user') {
@@ -672,12 +732,72 @@ app.post('/admin/users/:id/delete', async (c) => {
   if (!admin) return c.redirect('/')
   const id = c.req.param('id')
   if (id === admin.id) return c.redirect('/admin')
+  // 禁止删除超级管理员
+  const targetSuper = await isSuperAdmin(c.env.DB, id)
+  if (targetSuper) return c.redirect('/admin')
   // 同时级联删除其 DNS 记录 + Cloudflare 中对应记录
   const records = await listRecordsByUser(c.env.DB, id)
   for (const r of records) {
     await deleteRecordAndCloudflare(c.env, r)
   }
   await deleteUserCascade(c.env.DB, id)
+  return c.redirect('/admin')
+})
+
+app.post('/admin/users/:id/limit', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const id = c.req.param('id')
+  const form = await c.req.formData()
+  const raw = String(form.get('record_limit') ?? '').trim()
+  let limit: number | null = null
+  if (raw !== '') {
+    const n = Number(raw)
+    if (Number.isFinite(n) && n >= 0) {
+      limit = Math.floor(n)
+    } else {
+      return c.redirect('/admin')
+    }
+  }
+  await setUserRecordLimit(c.env.DB, id, limit)
+  return c.redirect('/admin')
+})
+
+// 管理员手动创建用户（无需走注册流程）
+app.post('/admin/users/create', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const form = await c.req.formData()
+  const name = String(form.get('name') ?? '').trim()
+  const email = String(form.get('email') ?? '').trim()
+  const password = String(form.get('password') ?? '')
+  const role = String(form.get('role') ?? 'user') === 'admin' ? 'admin' : 'user'
+
+  if (!name || !email || password.length < 8) {
+    return c.redirect('/admin?create_error=' + encodeURIComponent('参数不完整或密码少于8位'))
+  }
+
+  const auth = createAuth(c.env)
+  try {
+    const signUpRes = await auth.api.signUpEmail({
+      body: { name, email, password },
+      headers: c.req.raw.headers,
+      asResponse: true
+    })
+    if (!signUpRes.ok) {
+      const data = await signUpRes.json().catch(() => ({}))
+      const msg = (data as { message?: string }).message || '创建用户失败'
+      return c.redirect('/admin?create_error=' + encodeURIComponent(msg))
+    }
+    const listRes = await listAllUsers(c.env.DB)
+    const newUser = listRes.find((u) => u.email === email)
+    if (newUser && role === 'admin') {
+      await setUserRole(c.env.DB, newUser.id, 'admin')
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '创建用户失败'
+    return c.redirect('/admin?create_error=' + encodeURIComponent(msg))
+  }
   return c.redirect('/admin')
 })
 

@@ -7,7 +7,8 @@ export const AdminView: FC<{
   records: DnsRecordRow[]
   settings: Settings
   currentUserId: string
-}> = ({ users, records, settings, currentUserId }) => {
+  createError?: string
+}> = ({ users, records, settings, currentUserId, createError }) => {
   return (
     <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-16">
       {/* Navigation Header */}
@@ -76,15 +77,41 @@ export const AdminView: FC<{
 
                 <div>
                   <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">GitHub 账号最短注册天数限制</label>
-                  <input 
-                    type="number" 
-                    name="github_min_account_age_days" 
-                    value={settings.github_min_account_age_days} 
-                    min="0" 
+                  <input
+                    type="number"
+                    name="github_min_account_age_days"
+                    value={settings.github_min_account_age_days}
+                    min="0"
                     class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition font-mono-custom"
                     placeholder="0"
                   />
                   <span class="text-xs text-slate-500 mt-1 block">设置为 0 表示不限制</span>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">每用户记录数量上限</label>
+                  <input
+                    type="number"
+                    name="max_records_per_user"
+                    value={settings.max_records_per_user}
+                    min="0"
+                    class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition font-mono-custom"
+                    placeholder="5"
+                  />
+                  <span class="text-xs text-slate-500 mt-1 block">用户最多可创建的 DNS 记录条数；设为 0 表示不限。</span>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">子域名最小字符长度</label>
+                  <input
+                    type="number"
+                    name="min_subdomain_length"
+                    value={settings.min_subdomain_length}
+                    min="0"
+                    class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition font-mono-custom"
+                    placeholder="0"
+                  />
+                  <span class="text-xs text-slate-500 mt-1 block">例如设置为 4 时，仅允许 1111.example.com 或更长子域名；设为 0 表示不限制。</span>
                 </div>
               </div>
 
@@ -204,6 +231,46 @@ export const AdminView: FC<{
             <span class="text-xs text-slate-500">管理平台账号、修改权限角色或注销账号</span>
           </div>
 
+          {createError && (
+            <div class="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-sm text-rose-400">
+              {createError}
+            </div>
+          )}
+
+          {/* 手动创建用户 */}
+          <div class="mb-6 p-5 bg-slate-950/40 rounded-xl border border-slate-800/80">
+            <h4 class="text-sm font-bold text-white mb-4 flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+              </svg>
+              手动创建用户
+            </h4>
+            <form method="post" action="/admin/users/create" class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div class="md:col-span-3">
+                <label class="block text-xs font-semibold text-slate-500 mb-1">用户名</label>
+                <input type="text" name="name" required class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500" placeholder="newuser" />
+              </div>
+              <div class="md:col-span-4">
+                <label class="block text-xs font-semibold text-slate-500 mb-1">邮箱</label>
+                <input type="email" name="email" required class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500" placeholder="user@example.com" />
+              </div>
+              <div class="md:col-span-3">
+                <label class="block text-xs font-semibold text-slate-500 mb-1">密码 (≥8)</label>
+                <input type="password" name="password" required minLength={8} class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500" placeholder="••••••••" />
+              </div>
+              <div class="md:col-span-1">
+                <label class="block text-xs font-semibold text-slate-500 mb-1">角色</label>
+                <select name="role" class="w-full px-2 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500">
+                  <option value="user" selected>用户</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </div>
+              <div class="md:col-span-1">
+                <button type="submit" class="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg transition active:scale-[0.98]">创建</button>
+              </div>
+            </form>
+          </div>
+
           <div class="overflow-x-auto">
             <table class="w-full text-sm text-left border-collapse">
               <thead>
@@ -211,13 +278,19 @@ export const AdminView: FC<{
                   <th class="py-4 px-4">用户名</th>
                   <th class="py-4 px-4">注册邮箱</th>
                   <th class="py-4 px-4">角色</th>
+                  <th class="py-4 px-4">记录上限</th>
                   <th class="py-4 px-4">验证状态</th>
                   <th class="py-4 px-4">注册时间</th>
                   <th class="py-4 px-4 text-right">操作</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-800/60">
-                {users.map((u) => (
+                {users.map((u) => {
+                  const isSuper = !!u.super_admin
+                  const limit = u.record_limit === null || u.record_limit === undefined
+                    ? `全局 (${settings.max_records_per_user})`
+                    : String(u.record_limit)
+                  return (
                   <tr class="hover:bg-slate-900/40 transition">
                     <td class="py-4 px-4 text-white font-medium">
                       {u.name}
@@ -227,10 +300,29 @@ export const AdminView: FC<{
                     </td>
                     <td class="py-4 px-4 font-mono-custom text-slate-300">{u.email}</td>
                     <td class="py-4 px-4">
-                      {u.role === 'admin' ? (
+                      {isSuper ? (
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">超级管理员</span>
+                      ) : u.role === 'admin' ? (
                         <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">管理员</span>
                       ) : (
                         <span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">普通用户</span>
+                      )}
+                    </td>
+                    <td class="py-4 px-4 font-mono-custom text-slate-300 text-xs">
+                      {isSuper ? (
+                        <span class="text-amber-400">∞</span>
+                      ) : (
+                        <form method="post" action={`/admin/users/${u.id}/limit`} class="flex items-center gap-1">
+                          <input
+                            type="number"
+                            name="record_limit"
+                            min="0"
+                            value={u.record_limit === null || u.record_limit === undefined ? '' : u.record_limit}
+                            placeholder={String(settings.max_records_per_user)}
+                            class="w-16 px-2 py-1 bg-slate-900/60 border border-slate-800 rounded text-white text-xs focus:outline-none focus:border-emerald-500 font-mono-custom"
+                          />
+                          <button type="submit" class="px-1.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded transition" title="留空跟随全局上限">保存</button>
+                        </form>
                       )}
                     </td>
                     <td class="py-4 px-4">
@@ -242,7 +334,7 @@ export const AdminView: FC<{
                     </td>
                     <td class="py-4 px-4 text-slate-400 text-xs">{new Date(u.createdAt).toLocaleString('zh-CN')}</td>
                     <td class="py-4 px-4 text-right">
-                      {u.id !== currentUserId && (
+                      {u.id !== currentUserId && !isSuper && (
                         <div class="flex justify-end gap-2">
                           {u.role !== 'admin' ? (
                             <form method="post" action={`/admin/users/${u.id}/role`} class="inline">
@@ -266,9 +358,13 @@ export const AdminView: FC<{
                           </form>
                         </div>
                       )}
+                      {isSuper && (
+                        <span class="text-xs text-amber-500/70 italic">受保护</span>
+                      )}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

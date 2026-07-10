@@ -31,6 +31,18 @@ export function createAuth(env: AuthBindings) {
           required: false,
           defaultValue: 'user',
           input: false
+        },
+        super_admin: {
+          type: 'number',
+          required: false,
+          defaultValue: 0,
+          input: false
+        },
+        record_limit: {
+          type: 'number',
+          required: false,
+          defaultValue: null,
+          input: false
         }
       }
     },
@@ -53,6 +65,8 @@ export type AuthUser = {
   emailVerified: boolean
   image?: string | null | undefined
   role?: string | null | undefined
+  super_admin?: number | null | undefined
+  record_limit?: number | null | undefined
   createdAt: Date
   updatedAt: Date
 }
@@ -69,7 +83,18 @@ export async function getCurrentSession(env: AuthBindings, headers: Headers): Pr
 
 export async function getCurrentUser(env: AuthBindings, headers: Headers): Promise<AuthUser | null> {
   const s = await getCurrentSession(env, headers)
-  return s ? { ...s.user, role: (s.user as any).role as string | undefined } : null
+  if (!s) return null
+  const u = s.user as any
+  return {
+    ...s.user,
+    role: (u.role as string | undefined) ?? 'user',
+    super_admin: (u.super_admin as number | null | undefined) ?? 0,
+    record_limit: u.record_limit === undefined || u.record_limit === null ? null : Number(u.record_limit)
+  }
+}
+
+export function isSuperAdminUser(u: AuthUser | null | undefined): boolean {
+  return !!u && Number(u.super_admin ?? 0) > 0
 }
 
 export async function isAdmin(env: AuthBindings, headers: Headers): Promise<boolean> {

@@ -86,7 +86,7 @@ export async function countUsers(db: D1Database): Promise<number> {
 
 export async function listAllUsers(db: D1Database): Promise<UserListRow[]> {
   const r = await db
-    .prepare('SELECT id, name, email, emailVerified, role, createdAt FROM user ORDER BY "createdAt" DESC')
+    .prepare('SELECT id, name, email, emailVerified, role, super_admin, record_limit, createdAt FROM user ORDER BY "createdAt" ASC')
     .all<UserListRow>()
   return r.results ?? []
 }
@@ -97,14 +97,16 @@ export type UserListRow = {
   email: string
   emailVerified: number
   role: string
+  super_admin: number
+  record_limit: number | null
   createdAt: number
 }
 
 export async function findUserById(db: D1Database, id: string) {
   return await db
-    .prepare('SELECT id, name, email, role FROM user WHERE id = ?')
+    .prepare('SELECT id, name, email, role, super_admin, record_limit FROM user WHERE id = ?')
     .bind(id)
-    .first<{ id: string; name: string; email: string; role: string }>()
+    .first<{ id: string; name: string; email: string; role: string; super_admin: number; record_limit: number | null }>()
 }
 
 export async function setUserRole(
@@ -113,6 +115,56 @@ export async function setUserRole(
   role: 'admin' | 'user'
 ): Promise<void> {
   await db.prepare('UPDATE user SET role = ? WHERE id = ?').bind(role, id).run()
+}
+
+export async function setUserRecordLimit(
+  db: D1Database,
+  id: string,
+  limit: number | null
+): Promise<void> {
+  const value = limit === null ? null : Math.max(0, Math.floor(limit))
+  await db
+    .prepare('UPDATE user SET record_limit = ? WHERE id = ?')
+    .bind(value, id)
+    .run()
+}
+
+export async function setSuperAdmin(
+  db: D1Database,
+  id: string,
+  superAdmin: boolean
+): Promise<void> {
+  await db
+    .prepare('UPDATE user SET super_admin = ? WHERE id = ?')
+    .bind(superAdmin ? 1 : 0, id)
+    .run()
+}
+
+export async function isSuperAdmin(db: D1Database, id: string): Promise<boolean> {
+  const r = await db
+    .prepare('SELECT super_admin FROM user WHERE id = ?')
+    .bind(id)
+    .first<{ super_admin: number }>()
+  return !!r?.super_admin
+}
+
+export async function countRecordsByUser(db: D1Database, userId: string): Promise<number> {
+  const r = await db
+    .prepare('SELECT COUNT(*) as n FROM dns_record WHERE user_id = ?')
+    .bind(userId)
+    .first<{ n: number }>()
+  return r?.n ?? 0
+}
+
+/**
+ * 计算用户的最终记录上限：用户自定义优先，否则用全局上限。
+ */
+export function resolveRecordLimit(
+  userLimit: number | null | undefined,
+  globalLimit: number
+): number {
+  if (userLimit === null || userLimit === undefined) return globalLimit
+  return Math.max(0, Math.floor(userLimit))
 }
 
 export async function deleteUserCascade(db: D1Database, id: string): Promise<void> {

@@ -9,6 +9,8 @@ export type Settings = {
   resend_enabled: boolean
   resend_api_key: string | null
   resend_from: string | null
+  max_records_per_user: number
+  min_subdomain_length: number
 }
 
 type DbRow = {
@@ -22,6 +24,8 @@ type DbRow = {
   resend_enabled: number
   resend_api_key: string | null
   resend_from: string | null
+  max_records_per_user: number | null
+  min_subdomain_length: number | null
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,7 +38,9 @@ export const DEFAULT_SETTINGS: Settings = {
   github_min_account_age_days: 0,
   resend_enabled: false,
   resend_api_key: null,
-  resend_from: null
+  resend_from: null,
+  max_records_per_user: 5,
+  min_subdomain_length: 0
 }
 
 export function isEmailAllowed(email: string, s: Settings): { ok: boolean; reason?: string } {
@@ -80,7 +86,9 @@ export async function getSettings(db: D1Database): Promise<Settings> {
     github_min_account_age_days: row.github_min_account_age_days || 0,
     resend_enabled: !!row.resend_enabled,
     resend_api_key: row.resend_api_key,
-    resend_from: row.resend_from
+    resend_from: row.resend_from,
+    max_records_per_user: row.max_records_per_user ?? DEFAULT_SETTINGS.max_records_per_user,
+    min_subdomain_length: row.min_subdomain_length ?? DEFAULT_SETTINGS.min_subdomain_length
   }
 }
 
@@ -103,7 +111,9 @@ export async function updateSettings(
         github_min_account_age_days = ?,
         resend_enabled = ?,
         resend_api_key = ?,
-        resend_from = ?
+        resend_from = ?,
+        max_records_per_user = ?,
+        min_subdomain_length = ?
       WHERE id = ?`
     )
     .bind(
@@ -117,6 +127,8 @@ export async function updateSettings(
       next.resend_enabled ? 1 : 0,
       next.resend_api_key ?? null,
       next.resend_from ?? null,
+      next.max_records_per_user,
+      next.min_subdomain_length,
       'default'
     )
     .run()

@@ -1,3 +1,5 @@
+import { raw } from 'hono/html'
+
 export const Layout = ({ children, title }: { children: any; title: string }) => (
   <html lang="zh-CN" class="h-full scroll-smooth">
     <head>
@@ -5,7 +7,7 @@ export const Layout = ({ children, title }: { children: any; title: string }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>{title}</title>
       <script src="https://cdn.tailwindcss.com"></script>
-      <script>{`
+      <script>{raw(`
         tailwind.config = {
           theme: {
             extend: {
@@ -22,8 +24,8 @@ export const Layout = ({ children, title }: { children: any; title: string }) =>
             }
           }
         }
-      `}</script>
-      <style>{`
+      `)}</script>
+      <style>{raw(`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
         body {
           font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -43,7 +45,7 @@ export const Layout = ({ children, title }: { children: any; title: string }) =>
           background-color: #0f172a;
           color: #f8fafc;
         }
-      `}</style>
+      `)}</style>
     </head>
     <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-brand-600 selection:text-white">
       <div class="flex-grow flex flex-col">

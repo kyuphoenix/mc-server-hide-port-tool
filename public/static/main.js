@@ -24,10 +24,35 @@ async function loadDomains() {
       rootDomainSelect.appendChild(option);
     }
 
+    // 展示子域名最小长度与记录上限提示
+    const info = [];
+    if (data.min_subdomain_length && data.min_subdomain_length > 0) {
+      info.push(`子域名至少 ${data.min_subdomain_length} 个字符`);
+    }
+    if (data.record_limit !== null && data.record_limit !== undefined && data.record_limit > 0) {
+      const countEl = document.getElementById('record-count');
+      const cur = countEl ? Number(countEl.textContent) : 0;
+      info.push(`记录上限 ${cur}/${data.record_limit}`);
+    } else if (data.record_limit === 0) {
+      info.push('记录数无上限');
+    }
+    setHint(info.join('  ·  '));
+
     setButtonEnabled(true);
   } catch (error) {
     rootDomainSelect.innerHTML = '<option value="">域名加载失败</option>';
     alert(error instanceof Error ? error.message : '域名加载失败，请检查 Worker 配置');
+  }
+}
+
+function setHint(text) {
+  let el = document.getElementById('create-hint');
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
   }
 }
 

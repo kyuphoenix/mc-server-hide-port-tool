@@ -118,8 +118,11 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
                 </svg>
                 我的记录 ({records.length})
               </h3>
+              <span id="record-count" class="hidden">{records.length}</span>
               <span class="text-xs text-slate-500">仅显示您名下的 DNS 解析记录</span>
             </div>
+
+            <div id="create-hint" class="hidden mb-4 p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-xs text-emerald-300"></div>
 
             <div class="overflow-x-auto">
               <table class="w-full text-sm text-left border-collapse">
