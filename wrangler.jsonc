@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "hide-port-tool",
+	"name": "mc-server-hide-port-tool",
 	"main": "src/index",
 	"compatibility_date": "2026-07-08",
 	"assets": {
@@ -21,7 +21,7 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "hide-port-tool-db",
+			"database_name": "mc-server-hide-port-tool-db",
 			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
 			"migrations_dir": "./migrations"
 		}

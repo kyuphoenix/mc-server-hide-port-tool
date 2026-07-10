@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 幂等确保 Cloudflare D1 数据库 hide-port-tool-db 存在，并把其 uuid 写回 wrangler.jsonc
+ * 幂等确保 Cloudflare D1 数据库 mc-server-hide-port-tool-db 存在，并把其 uuid 写回 wrangler.jsonc
  * 的 d1_databases[0].database_id。
  *
  * 通过 Cloudflare REST API 实现，避免依赖 wrangler d1 create（已存在时会报错阻塞）。
@@ -13,7 +13,7 @@ const fs = require('fs');
 
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
-const DB_NAME = 'hide-port-tool-db';
+const DB_NAME = 'mc-server-hide-port-tool-db';
 const CONFIG_PATH = 'wrangler.jsonc';
 
 if (!ACCOUNT_ID || !API_TOKEN) {
