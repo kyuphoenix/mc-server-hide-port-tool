@@ -169,7 +169,9 @@ jobs:
           set -euo pipefail
           for key in $SECRET_KEYS; do
             env_name="$(python scripts/resolve_env_keys.py "$key")"
-            val="${!env_name}"
+            # 用 declare + ${!var} 在 set -u 下安全取值（不存在则为空）
+            val="${env_name:+${!env_name}}"
+            val="${val:-}"
             if [ -z "$val" ]; then
               echo "[warn] 跳过 $key：对应 env $env_name 未设置或为空"
               continue
