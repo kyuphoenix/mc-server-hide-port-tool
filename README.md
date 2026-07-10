@@ -158,6 +158,9 @@ pnpm deploy
 
 > 判定是否敏感的规则：键名包含 `CLOUDFLARE_API_TOKEN` / `BETTER_AUTH_SECRET` / `GITHUB_CLIENT_SECRET` / `GITHUB_CLIENT_ID` 视为 secret，其余走明文 var。
 > `DOMAINS` 等 JSON 数组类变量在写入时会自动 `JSON.parse`，可直接传 `["a.com","b.com"]` 字符串。
+> `*_CLOUDFLARE_API_TOKEN` 类键命名约定：GitHub secret 名把 `CLOUDFLARE_API_TOKEN` 前置以避免数字开头，例如 `303302_xyz_CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_API_TOKEN_303302_XYZ`。
+
+**BETTER_AUTH_URL 自动绑定 custom domain**：CI 部署完成后会读取 `BETTER_AUTH_URL`，若该值指向非 `*.workers.dev` 的自定义主机名，会自动调用 Cloudflare API 把该域名绑定为 `hide-port-tool` worker 的 custom domain（前提是该域名已托管在同一 Cloudflare 账户）。指向 workers.dev 或未配置 zone 时会安全跳过。
 
 **新增根域名时**：在 `.dev.vars.example` 新增 `<域名点换下划线>_CLOUDFLARE_API_TOKEN=` 一行，并在仓库添加对应同名（大写形式）secret 即可，无需改动 workflow。
 

@@ -14,11 +14,15 @@
 后续步骤直接 parse stdout 即可。
 
 GitHub Actions 调用约定：
-  每个 .dev.vars.example 中的键 K，仓库里直接存同名 secret 与 env 变量。
-  注意 GitHub Actions secret / env 名必须仅含 [A-Z0-9_]，故把原键名全大写化后使用：
-  例：example1_com_CLOUDFLARE_API_TOKEN  ->  EXAMPLE1_COM_CLOUDFLARE_API_TOKEN
-      DOMAINS                            ->  DOMAINS
-      BETTER_AUTH_URL                    ->  BETTER_AUTH_URL
+  每个 .dev.vars.example 中的键 K，仓库里直接存同名（按下方规则变换）的 secret / env 变量。
+  GitHub Actions secret / env 名必须仅含 [A-Z0-9_] 且不得以数字开头，故：
+    (1) 形如 <域名>_CLOUDFLARE_API_TOKEN 的键 -> CLOUDFLARE_API_TOKEN_<域名> 全大写
+        例：example1_com_CLOUDFLARE_API_TOKEN ->  CLOUDFLARE_API_TOKEN_EXAMPLE1_COM
+            303302_xyz_CLOUDFLARE_API_TOKEN   ->  CLOUDFLARE_API_TOKEN_303302_XYZ
+            （把数字段挪到字母前缀之后，避免数字开头）
+    (2) 其余键直接全大写、非字母数字替换为 _：
+        例：DOMAINS          ->  DOMAINS
+            BETTER_AUTH_URL  ->  BETTER_AUTH_URL
 """
 from __future__ import annotations
 import json
@@ -27,17 +31,25 @@ import re
 import sys
 from pathlib import Path
 
+# 形如 <前缀>_CLOUDFLARE_API_TOKEN 的键
+DOMAIN_TOKEN_RE = re.compile(r"^(?P<domain>.+)_CLOUDFLARE_API_TOKEN$", re.IGNORECASE)
+
+
+def secret_name_for(key: str) -> str:
+    """把 .dev.vars.example 中的键名映射为 GitHub Actions secret / env 名（仅 [A-Z0-9_]，不数字开头）。"""
+    m = DOMAIN_TOKEN_RE.match(key)
+    if m:
+        domain = re.sub(r"[^A-Z0-9_]", "_", m.group("domain").upper())
+        return f"CLOUDFLARE_API_TOKEN_{domain}"
+    return re.sub(r"[^A-Z0-9_]", "_", key.upper())
+
+
 SENSITIVE_PATTERNS = (
     "CLOUDFLARE_API_TOKEN",
     "BETTER_AUTH_SECRET",
     "GITHUB_CLIENT_SECRET",
     "GITHUB_CLIENT_ID",
 )
-
-
-def secret_name_for(key: str) -> str:
-    """把 .dev.vars.example 中的键名映射为 GitHub Actions secret / env 名（仅 [A-Z0-9_]）。"""
-    return re.sub(r"[^A-Z0-9_]", "_", key.upper())
 
 
 def is_sensitive(key: str) -> bool:
@@ -82,5 +94,29 @@ def main() -> int:
     return 0
 
 
+def _parse_example_keys() -> list[str]:
+    """读取 .dev.vars.example 中的所有键。"""
+    example = Path(__file__).resolve().parent.parent / ".dev.vars.example"
+    if not example.exists():
+        return []
+    keys: list[str] = []
+    for line in example.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key:
+            keys.append(key)
+    return keys
+
+
 if __name__ == "__main__":
+    # 兼容两种调用：
+    #   python resolve_env_keys.py            -> 原行为，输出两行 secret/var 键列表
+    #   python resolve_env_keys.py <key>...   -> 逐行打印各键对应的 GitHub env 名
+    args = sys.argv[1:]
+    if args:
+        for k in args:
+            print(secret_name_for(k))
+        sys.exit(0)
     sys.exit(main())

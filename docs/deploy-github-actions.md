@@ -31,7 +31,11 @@
 | `DOMAINS` | `DOMAINS` | ❌ 普通明文 var，写入 wrangler.jsonc |
 | `BETTER_AUTH_URL` | `BETTER_AUTH_URL` | ❌ 普通明文 var |
 
-> 若新增根域名，按 `<域名点换下划线>_CLOUDFLARE_API_TOKEN` 写到 `.dev.vars.example`，再添加对应同名（大写）secret 即可，无需改 workflow。
+> 若新增根域名，按 `<域名点换下划线>_CLOUDFLARE_API_TOKEN` 写到 `.dev.vars.example`，再添加对应同名（大写、`CLOUDFLARE_API_TOKEN` 前置）secret 即可，无需改 workflow。
+
+> 关于 secret 命名：`*_CLOUDFLARE_API_TOKEN` 类键在 GitHub env 中需把 `CLOUDFLARE_API_TOKEN` 前置（避免数字开头），例：`303302_xyz_CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_API_TOKEN_303302_XYZ`；其余键直接全大写。映射由 `scripts/resolve_env_keys.py` 自动处理。
+
+**BETTER_AUTH_URL 自动绑定 custom domain**：CI 部署后会读取 `BETTER_AUTH_URL`，若指向非 `*.workers.dev` 的自定义主机名，会自动调用 Cloudflare API 把它绑定为 `hide-port-tool` worker 的 custom domain（要求该域名已托管在同一 Cloudflare 账户）。指向 workers.dev 或未配置 zone 时会安全跳过。
 
 ## 流程
 
