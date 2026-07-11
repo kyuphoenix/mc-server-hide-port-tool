@@ -1,15 +1,19 @@
 import type { FC } from 'hono/jsx'
 import type { DnsRecordRow, UserListRow } from '../services/dns-records'
+import type { InviteCodeRow } from '../services/invite-codes'
 import type { Settings } from '../services/settings'
 
 export const AdminView: FC<{
   users: UserListRow[]
   records: DnsRecordRow[]
   settings: Settings
+  inviteCodes: InviteCodeRow[]
   currentUserId: string
   currentUserSuperAdmin: boolean
   createError?: string
-}> = ({ users, records, settings, currentUserId, currentUserSuperAdmin, createError }) => {
+  inviteError?: string
+  inviteInfo?: string
+}> = ({ users, records, settings, inviteCodes, currentUserId, currentUserSuperAdmin, createError, inviteError, inviteInfo }) => {
   return (
     <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-16">
       {/* Navigation Header */}
@@ -74,6 +78,17 @@ export const AdminView: FC<{
                     <option value="github" selected={settings.registration_mode === 'github'}>仅 GitHub 授权模式</option>
                     <option value="both" selected={settings.registration_mode === 'both'}>邮箱 + GitHub 双模式</option>
                   </select>
+                </div>
+
+                <div class="flex items-center gap-3 bg-slate-950/40 p-4 rounded-xl border border-slate-800/80">
+                  <input 
+                    type="checkbox" 
+                    id="invite_required"
+                    name="invite_required" 
+                    checked={settings.invite_required} 
+                    class="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 bg-slate-950 border-slate-800"
+                  />
+                  <label for="invite_required" class="text-sm font-medium text-slate-200 cursor-pointer">???????</label>
                 </div>
 
                 <div>
@@ -220,7 +235,108 @@ export const AdminView: FC<{
           </form>
         </section>
 
-        {/* User Management Section */}
+        
+        {/* Invite Codes Section */}
+        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+          <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
+            <h3 class="text-xl font-bold text-white flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+              ????? ({inviteCodes.length})
+            </h3>
+            <span class="text-xs text-slate-500">????????????????????????</span>
+          </div>
+
+          {inviteError && (
+            <div class="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-sm text-rose-400">{inviteError}</div>
+          )}
+          {inviteInfo && (
+            <div class="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400">{inviteInfo}</div>
+          )}
+
+          <div class="mb-6 flex flex-wrap items-center gap-3">
+            <form method="post" action="/admin/invites/create">
+              <button
+                type="submit"
+                disabled={!settings.invite_required}
+                class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded-lg transition active:scale-[0.98]"
+              >
+                ?????
+              </button>
+            </form>
+            {!settings.invite_required && (
+              <span class="text-xs text-slate-500">??????????????</span>
+            )}
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  <th class="py-4 px-4">???</th>
+                  <th class="py-4 px-4">??</th>
+                  <th class="py-4 px-4">???</th>
+                  <th class="py-4 px-4">???</th>
+                  <th class="py-4 px-4">????</th>
+                  <th class="py-4 px-4 text-right">??</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60">
+                {inviteCodes.length === 0 ? (
+                  <tr>
+                    <td colspan={6} class="py-8 px-4 text-center text-slate-500">?????</td>
+                  </tr>
+                ) : (
+                  inviteCodes.map((code) => {
+                    const status = code.revoked ? '???' : code.used_by ? '???' : '???'
+                    const statusClass = code.revoked
+                      ? 'bg-slate-800 text-slate-400 border-slate-700'
+                      : code.used_by
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    return (
+                      <tr class="hover:bg-slate-900/40 transition">
+                        <td class="py-4 px-4 font-mono-custom text-white tracking-wider">{code.code}</td>
+                        <td class="py-4 px-4">
+                          <span class={`px-2 py-0.5 rounded text-xs font-semibold border ${statusClass}`}>{status}</span>
+                        </td>
+                        <td class="py-4 px-4 text-slate-300 text-xs">
+                          {code.creator_name || code.created_by}
+                          {code.creator_email ? <div class="text-slate-500">{code.creator_email}</div> : null}
+                        </td>
+                        <td class="py-4 px-4 text-slate-300 text-xs">
+                          {code.used_by ? (
+                            <>
+                              {code.used_name || code.used_by}
+                              {code.used_email ? <div class="text-slate-500">{code.used_email}</div> : null}
+                            </>
+                          ) : (
+                            <span class="text-slate-600">-</span>
+                          )}
+                        </td>
+                        <td class="py-4 px-4 text-slate-400 text-xs">{new Date(code.created_at).toLocaleString('zh-CN')}</td>
+                        <td class="py-4 px-4 text-right">
+                          {!code.used_by && !code.revoked ? (
+                            <form method="post" action={`/admin/invites/${code.id}/revoke`} class="inline">
+                              <button type="submit" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition">
+                                Revoke
+                              </button>
+                            </form>
+                          ) : (
+                            <span class="text-xs text-slate-600">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+{/* User Management Section */}
         <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
             <h3 class="text-xl font-bold text-white flex items-center gap-2">

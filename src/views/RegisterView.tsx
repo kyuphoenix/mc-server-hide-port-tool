@@ -109,6 +109,20 @@ export const RegisterView: FC<{
               </div>
             )}
 
+            {settings.invite_required && (
+              <div>
+                <label for="invite_code" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">???</label>
+                <input
+                  type="text"
+                  id="invite_code"
+                  name="invite_code"
+                  required
+                  class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white font-mono-custom tracking-widest focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition"
+                  placeholder="XXXXX-XXXXX"
+                />
+              </div>
+            )}
+
             {needVerification && (
               <p class="text-xs text-slate-400 bg-slate-950/40 p-3 rounded-lg border border-slate-800/80">
                 💡 填写后会发送验证码到你的邮箱，再进入下一步验证。
@@ -164,6 +178,20 @@ export const RegisterView: FC<{
               </div>
             )}
             <form method="post" action="/register/github">
+              {settings.invite_required && (
+                <div class="mb-3">
+                  <label for="github_invite_code" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">???</label>
+                  <input
+                    type="text"
+                    id="github_invite_code"
+                    name="invite_code"
+                    required
+                    class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white font-mono-custom tracking-widest focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition"
+                    placeholder="XXXXX-XXXXX"
+                  />
+                </div>
+              )}
+
               <button
                 type="submit"
                 class="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl transition duration-200 flex items-center justify-center gap-3 border border-slate-700 shadow-md active:scale-[0.98] focus:outline-none"

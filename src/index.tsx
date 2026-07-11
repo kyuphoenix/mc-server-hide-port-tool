@@ -36,6 +36,13 @@ import {
   type DnsRecordRow,
   type UserListRow
 } from './services/dns-records'
+import {
+  assertInviteCodeAvailable,
+  consumeInviteCode,
+  createInviteCode,
+  listInviteCodes,
+  revokeInviteCode
+} from './services/invite-codes'
 import { sendVerificationCode } from './services/mailer'
 import { getGitHubUser, meetsAgeRequirement } from './services/github'
 
@@ -245,6 +252,58 @@ function redirectWithHeaders(location: string, status: 302 | 303 = 302, headers?
   return new Response(null, { status, headers: responseHeaders })
 }
 
+async function requireInviteCodeIfNeeded(
+  db: D1Database,
+  settings: Settings,
+  inviteCode: string
+): Promise<{ ok: true; code: string | null } | { ok: false; message: string }> {
+  if (!settings.invite_required) {
+    return { ok: true, code: null }
+  }
+  const normalized = inviteCode.trim().toUpperCase()
+  if (!normalized) {
+    return { ok: false, message: '??????' }
+  }
+  const check = await assertInviteCodeAvailable(db, normalized)
+  if (!check.ok) {
+    return { ok: false, message: check.message }
+  }
+  return { ok: true, code: normalized }
+}
+
+async function findUserIdByEmail(db: D1Database, email: string): Promise<string | null> {
+  const row = await db
+    .prepare('SELECT id FROM user WHERE email = ? LIMIT 1')
+    .bind(email)
+    .first<{ id: string }>()
+  return row?.id ?? null
+}
+
+async function finalizeInviteUsage(
+  db: D1Database,
+  inviteCode: string | null | undefined,
+  userId: string | null | undefined
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!inviteCode || !userId) return { ok: true }
+  return await consumeInviteCode(db, inviteCode, userId)
+}
+
+function parseCookie(header: string, name: string): string | null {
+  const parts = header.split(';')
+  for (const part of parts) {
+    const [rawKey, ...rest] = part.trim().split('=')
+    if (rawKey === name) {
+      try {
+        return decodeURIComponent(rest.join('=') || '')
+      } catch {
+        return rest.join('=') || ''
+      }
+    }
+  }
+  return null
+}
+
+
 // ---------- Onboarding ----------
 app.get('/setup', async (c) => {
   const userCount = await countUsers(c.env.DB)
@@ -410,13 +469,13 @@ app.post('/register', async (c) => {
   const settings = await getSettings(c.env.DB)
   if (!settings.registration_enabled) {
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error="管理员已关闭注册" /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error="????????" /></Layout>,
       { status: 403 }
     )
   }
   if (settings.registration_mode === 'github') {
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error="仅支持 GitHub 注册" /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error="??? GitHub ??" /></Layout>,
       { status: 403 }
     )
   }
@@ -426,10 +485,11 @@ app.post('/register', async (c) => {
   const name = String(form.get('name') ?? '').trim()
   const email = String(form.get('email') ?? '').trim()
   const password = String(form.get('password') ?? '')
+  const inviteCode = String(form.get('invite_code') ?? '').trim()
 
   if (!name || !email || !password) {
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error="请填写完整" /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error="?????" /></Layout>,
       { status: 400 }
     )
   }
@@ -437,36 +497,44 @@ app.post('/register', async (c) => {
   const emailCheck = isEmailAllowed(email, settings)
   if (!emailCheck.ok) {
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error={emailCheck.reason!} /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error={emailCheck.reason!} /></Layout>,
       { status: 400 }
     )
   }
 
-  // 启用 Resend → 走验证码流程
+  const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, inviteCode)
+  if (!inviteCheck.ok) {
+    return c.html(
+      <Layout title="??"><RegisterView settings={settings} error={inviteCheck.message} /></Layout>,
+      { status: 400 }
+    )
+  }
+
+  // ?? Resend ? ??????
   if (settings.resend_enabled && settings.resend_api_key && settings.resend_from) {
     const code = String(Math.floor(100000 + Math.random() * 900000))
     const codeHash = await sha256(code)
     const id = genId()
     const expires_at = Date.now() + 10 * 60 * 1000
     await c.env.DB
-      .prepare('INSERT INTO email_verification (id, email, name, password, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, email, name, password, codeHash, expires_at, Date.now())
+      .prepare('INSERT INTO email_verification (id, email, name, password, code_hash, expires_at, created_at, invite_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, email, name, password, codeHash, expires_at, Date.now(), inviteCheck.code)
       .run()
     const result = await sendVerificationCode(c.env, email, code)
     if (!result.ok) {
       return c.html(
-        <Layout title="注册"><RegisterView settings={settings} error={result.message || '验证码发送失败'} /></Layout>,
+        <Layout title="??"><RegisterView settings={settings} error={result.message || '???????'} /></Layout>,
         { status: 500 }
       )
     }
     return c.html(
-      <Layout title="邮箱验证">
+      <Layout title="????">
         <VerifyEmailView email={email} />
       </Layout>
     )
   }
 
-  // 未启用 SMTP → 直接注册完成
+  // ??? SMTP ? ??????
   try {
     const res = await auth.api.signUpEmail({
       body: { name, email, password },
@@ -474,26 +542,34 @@ app.post('/register', async (c) => {
       asResponse: true
     })
     if (res.ok) {
+      const newUserId = await findUserIdByEmail(c.env.DB, email)
+      const used = await finalizeInviteUsage(c.env.DB, inviteCheck.code, newUserId)
+      if (!used.ok && newUserId) {
+        await deleteUserCascade(c.env.DB, newUserId)
+        return c.html(
+          <Layout title="??"><RegisterView settings={settings} error={used.message} /></Layout>,
+          { status: 400 }
+        )
+      }
       return redirectWithHeaders('/login?registered=1', 302, res.headers)
     }
     const data = await res.json().catch(() => ({}))
     const message =
       (data as { message?: string }).message ||
-      (res.status === 422 ? '该邮箱已被注册' : '注册失败')
+      (res.status === 422 ? '???????' : '????')
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
       { status: res.status as 400 | 401 | 422 }
     )
   } catch (err) {
-    const message = err instanceof Error ? err.message : '注册失败'
+    const message = err instanceof Error ? err.message : '????'
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
       { status: 500 }
     )
   }
 })
 
-// ---------- 邮箱验证码确认 ----------
 app.post('/verify-email', async (c) => {
   const user = await getCurrentUser(c.env, c.req.raw.headers)
   if (user) return c.redirect('/')
@@ -575,8 +651,17 @@ app.post('/register/github', async (c) => {
   }
   if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET) {
     return c.html(
-      <Layout title="注册"><RegisterView settings={settings} error="GitHub OAuth 未配置" /></Layout>,
+      <Layout title="??"><RegisterView settings={settings} error="GitHub OAuth ???" /></Layout>,
       { status: 500 }
+    )
+  }
+  const form = await c.req.formData()
+  const inviteCode = String(form.get('invite_code') ?? '').trim()
+  const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, inviteCode)
+  if (!inviteCheck.ok) {
+    return c.html(
+      <Layout title="??"><RegisterView settings={settings} error={inviteCheck.message} /></Layout>,
+      { status: 400 }
     )
   }
   const auth = createAuth(c.env)
@@ -588,45 +673,62 @@ app.post('/register/github', async (c) => {
     headers: c.req.raw.headers,
     asResponse: true
   })
+  if (inviteCheck.code) {
+    const headers = new Headers(res.headers)
+    headers.append(
+      'Set-Cookie',
+      `pending_invite_code=${encodeURIComponent(inviteCheck.code)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1800`
+    )
+    return new Response(res.body, { status: res.status, headers })
+  }
   return res
 })
 
-// GitHub 回调后，本路由在校验年龄不达标时删除已创建账号。
-// 注意：better-auth 的 callback 路由由 /api/auth/* 处理，回调后通过 callbackURL 重定向到这里。
 app.get('/register/github/done', async (c) => {
   const user = await getCurrentUser(c.env, c.req.raw.headers)
   const settings = await getSettings(c.env.DB)
+  const cookieHeader = c.req.header('Cookie') || ''
+  const pendingInvite = parseCookie(cookieHeader, 'pending_invite_code')
+  const clearInviteCookie = 'pending_invite_code=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
   if (!user) {
-    return c.redirect('/login')
+    return redirectWithHeaders('/login', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
   }
-  // 取该用户对应 GitHub account 的 accessToken 用于校验
+  // ?????? GitHub account ? accessToken ????
   const account = await c.env.DB
     .prepare("SELECT accessToken FROM account WHERE userId = ? AND providerId = 'github' ORDER BY updatedAt DESC LIMIT 1")
     .bind(user.id)
     .first<{ accessToken: string | null }>()
-  if (!account || !account.accessToken) {
-    // 没有 token 就无法校验，直接放行
-    return c.redirect('/')
-  }
-  const ghUser = await getGitHubUser(account.accessToken)
-  if (!ghUser) {
-    return c.redirect('/')
-  }
-  if (!meetsAgeRequirement(ghUser.created_at, settings.github_min_account_age_days)) {
-    // 删除刚创建的账号
+
+  const failInvite = async (message: string, status: 400 | 403 = 400) => {
     await deleteUserCascade(c.env.DB, user.id)
     return c.html(
-      <Layout title="注册">
-        <RegisterView
-          settings={settings}
-          error={`您的 GitHub 账号注册时间未达到要求（需要至少 ${settings.github_min_account_age_days} 天）`}
-        />
-      </Layout>,
-      { status: 403 }
+      <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
+      { status, headers: { 'Set-Cookie': clearInviteCookie } }
     )
   }
-  return c.redirect('/')
+
+  if (account?.accessToken) {
+    const ghUser = await getGitHubUser(account.accessToken)
+    if (ghUser && !meetsAgeRequirement(ghUser.created_at, settings.github_min_account_age_days)) {
+      return await failInvite(
+        `?? GitHub ???????????????? ${settings.github_min_account_age_days} ??`,
+        403
+      )
+    }
+  }
+
+  // GitHub ????????/????????????????
+  const createdAtMs = new Date(user.createdAt).getTime()
+  const isNewUser = Number.isFinite(createdAtMs) && Date.now() - createdAtMs < 5 * 60 * 1000
+  if (settings.invite_required && isNewUser) {
+    const used = await finalizeInviteUsage(c.env.DB, pendingInvite, user.id)
+    if (!used.ok) {
+      return await failInvite(used.message)
+    }
+  }
+  return redirectWithHeaders('/', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
 })
+
 
 // ---------- 退出 ----------
 app.on(['GET', 'POST'], '/logout', async (c) => {
@@ -657,25 +759,28 @@ app.post('/dns/:id/delete', async (c) => {
 app.get('/admin', async (c) => {
   const user = await requireAdmin(c.env, c.req.raw.headers)
   if (!user) return c.redirect('/')
-  const [users, records, settings] = await Promise.all([
+  const [users, records, settings, inviteCodes] = await Promise.all([
     listAllUsers(c.env.DB),
     listAllRecords(c.env.DB),
-    getSettings(c.env.DB)
+    getSettings(c.env.DB),
+    listInviteCodes(c.env.DB)
   ])
   return c.html(
-    <Layout title="管理后台">
+    <Layout title="????">
       <AdminView
         users={users}
         records={records}
         settings={settings}
+        inviteCodes={inviteCodes}
         currentUserId={user.id}
         currentUserSuperAdmin={isSuperAdminUser(user)}
         createError={c.req.query('create_error') ?? undefined}
+        inviteError={c.req.query('invite_error') ?? undefined}
+        inviteInfo={c.req.query('invite_info') ?? undefined}
       />
     </Layout>
   )
 })
-
 app.post('/admin/settings', async (c) => {
   const admin = await requireAdmin(c.env, c.req.raw.headers)
   if (!admin) return c.redirect('/')
@@ -693,6 +798,7 @@ app.post('/admin/settings', async (c) => {
   const patch: Partial<Settings> = {
     registration_enabled: form.get('registration_enabled') === 'on',
     registration_mode: modeNorm,
+    invite_required: form.get('invite_required') === 'on',
     email_whitelist_enabled: form.get('email_whitelist_enabled') === 'on',
     email_whitelist_suffixes: splitCsv(whitelistSuffixesRaw),
     email_blacklist_enabled: form.get('email_blacklist_enabled') === 'on',
@@ -819,6 +925,35 @@ app.post('/admin/dns/:id/delete', async (c) => {
     await deleteRecordAndCloudflare(c.env, record)
   }
   return c.redirect('/admin')
+})
+
+
+app.post('/admin/invites/create', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  // ????/?????????requireAdmin ??? role=admin
+  const settings = await getSettings(c.env.DB)
+  if (!settings.invite_required) {
+    return c.redirect('/admin?invite_error=' + encodeURIComponent('?????????'))
+  }
+  try {
+    const created = await createInviteCode(c.env.DB, admin.id)
+    return c.redirect('/admin?invite_info=' + encodeURIComponent(`?????? ${created.code}`))
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '???????'
+    return c.redirect('/admin?invite_error=' + encodeURIComponent(msg))
+  }
+})
+
+app.post('/admin/invites/:id/revoke', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const id = c.req.param('id')
+  const result = await revokeInviteCode(c.env.DB, id)
+  if (!result.ok) {
+    return c.redirect('/admin?invite_error=' + encodeURIComponent(result.message))
+  }
+  return c.redirect('/admin?invite_info=' + encodeURIComponent('??????'))
 })
 
 export default app

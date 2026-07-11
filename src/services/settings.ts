@@ -1,6 +1,7 @@
-export type Settings = {
+﻿export type Settings = {
   registration_enabled: boolean
   registration_mode: 'email' | 'github' | 'both'
+  invite_required: boolean
   email_whitelist_enabled: boolean
   email_whitelist_suffixes: string[]
   email_blacklist_enabled: boolean
@@ -16,6 +17,7 @@ export type Settings = {
 type DbRow = {
   registration_enabled: number
   registration_mode: string
+  invite_required: number | null
   email_whitelist_enabled: number
   email_whitelist_suffixes: string
   email_blacklist_enabled: number
@@ -31,6 +33,7 @@ type DbRow = {
 export const DEFAULT_SETTINGS: Settings = {
   registration_enabled: true,
   registration_mode: 'email',
+  invite_required: false,
   email_whitelist_enabled: false,
   email_whitelist_suffixes: [],
   email_blacklist_enabled: false,
@@ -79,6 +82,7 @@ export async function getSettings(db: D1Database): Promise<Settings> {
   return {
     registration_enabled: !!row.registration_enabled,
     registration_mode: normalizeMode(row.registration_mode),
+    invite_required: !!row.invite_required,
     email_whitelist_enabled: !!row.email_whitelist_enabled,
     email_whitelist_suffixes: safeParseArray(row.email_whitelist_suffixes),
     email_blacklist_enabled: !!row.email_blacklist_enabled,
@@ -104,6 +108,7 @@ export async function updateSettings(
       `UPDATE settings SET
         registration_enabled = ?,
         registration_mode = ?,
+        invite_required = ?,
         email_whitelist_enabled = ?,
         email_whitelist_suffixes = ?,
         email_blacklist_enabled = ?,
@@ -119,6 +124,7 @@ export async function updateSettings(
     .bind(
       next.registration_enabled ? 1 : 0,
       next.registration_mode,
+      next.invite_required ? 1 : 0,
       next.email_whitelist_enabled ? 1 : 0,
       JSON.stringify(next.email_whitelist_suffixes),
       next.email_blacklist_enabled ? 1 : 0,
@@ -152,3 +158,4 @@ function safeParseArray(raw: string): string[] {
   }
   return []
 }
+
