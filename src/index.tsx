@@ -37,6 +37,16 @@ import {
   type UserListRow
 } from './services/dns-records'
 import {
+  createOAuthProvider,
+  deleteOAuthProvider,
+  listOAuthProviders,
+  listPublicOAuthProviders,
+  setOAuthProviderEnabled,
+  updateOAuthProvider,
+  type OAuthProviderPublic,
+  type OAuthProviderRow
+} from './services/oauth-providers'
+import {
   assertInviteCodeAvailable,
   consumeInviteCode,
   createInviteCode,
@@ -102,8 +112,8 @@ type DnsRecordBody =
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-app.all('/api/auth/*', (c) => {
-  const auth = createAuth(c.env)
+app.all('/api/auth/*', async (c) => {
+  const auth = await createAuth(c.env)
   return auth.handler(c.req.raw)
 })
 
@@ -262,7 +272,7 @@ async function requireInviteCodeIfNeeded(
   }
   const normalized = inviteCode.trim().toUpperCase()
   if (!normalized) {
-    return { ok: false, message: '??????' }
+    return { ok: false, message: '请填写邀请码' }
   }
   const check = await assertInviteCodeAvailable(db, normalized)
   if (!check.ok) {
@@ -345,7 +355,7 @@ app.post('/setup', async (c) => {
     )
   }
 
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   try {
     const signUpRes = await auth.api.signUpEmail({
       body: { name, email, password },
@@ -411,16 +421,18 @@ app.get('/login', async (c) => {
   if (user) {
     return c.redirect(next || '/')
   }
+  const oauthProviders = await listPublicOAuthProviders(c.env.DB)
+  const error = c.req.query('error') || undefined
   const info = c.req.query('registered') ? '注册成功，请登录' : undefined
   return c.html(
     <Layout title="登录">
-      <LoginView next={next} info={info} />
+      <LoginView next={next} info={info} error={error} oauthProviders={oauthProviders} />
     </Layout>
   )
 })
 
 app.post('/login', async (c) => {
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   const form = await c.req.formData()
   const next = c.req.query('next') || '/'
   const email = String(form.get('email') ?? '').trim()
@@ -456,9 +468,10 @@ app.get('/register', async (c) => {
   const user = await getCurrentUser(c.env, c.req.raw.headers)
   if (user) return c.redirect('/')
   const settings = await getSettings(c.env.DB)
+  const oauthProviders = await listPublicOAuthProviders(c.env.DB)
   return c.html(
     <Layout title="注册">
-      <RegisterView settings={settings} />
+      <RegisterView settings={settings} oauthProviders={oauthProviders} />
     </Layout>
   )
 })
@@ -469,18 +482,18 @@ app.post('/register', async (c) => {
   const settings = await getSettings(c.env.DB)
   if (!settings.registration_enabled) {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error="????????" /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error="当前已关闭注册" /></Layout>,
       { status: 403 }
     )
   }
   if (settings.registration_mode === 'github') {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error="??? GitHub ??" /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error="仅支持 GitHub 注册" /></Layout>,
       { status: 403 }
     )
   }
 
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   const form = await c.req.formData()
   const name = String(form.get('name') ?? '').trim()
   const email = String(form.get('email') ?? '').trim()
@@ -489,7 +502,7 @@ app.post('/register', async (c) => {
 
   if (!name || !email || !password) {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error="?????" /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error="请填写完整信息" /></Layout>,
       { status: 400 }
     )
   }
@@ -497,7 +510,7 @@ app.post('/register', async (c) => {
   const emailCheck = isEmailAllowed(email, settings)
   if (!emailCheck.ok) {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error={emailCheck.reason!} /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error={emailCheck.reason!} /></Layout>,
       { status: 400 }
     )
   }
@@ -505,12 +518,12 @@ app.post('/register', async (c) => {
   const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, inviteCode)
   if (!inviteCheck.ok) {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error={inviteCheck.message} /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error={inviteCheck.message} /></Layout>,
       { status: 400 }
     )
   }
 
-  // ?? Resend ? ??????
+// 启用 Resend 时走验证码流程
   if (settings.resend_enabled && settings.resend_api_key && settings.resend_from) {
     const code = String(Math.floor(100000 + Math.random() * 900000))
     const codeHash = await sha256(code)
@@ -523,18 +536,18 @@ app.post('/register', async (c) => {
     const result = await sendVerificationCode(c.env, email, code)
     if (!result.ok) {
       return c.html(
-        <Layout title="??"><RegisterView settings={settings} error={result.message || '???????'} /></Layout>,
+        <Layout title="邮箱验证"><RegisterView settings={settings} error={result.message || '验证码发送失败'} /></Layout>,
         { status: 500 }
       )
     }
     return c.html(
-      <Layout title="????">
+      <Layout title="邮箱验证">
         <VerifyEmailView email={email} />
       </Layout>
     )
   }
 
-  // ??? SMTP ? ??????
+// 未启用 SMTP 时直接完成注册
   try {
     const res = await auth.api.signUpEmail({
       body: { name, email, password },
@@ -547,7 +560,7 @@ app.post('/register', async (c) => {
       if (!used.ok && newUserId) {
         await deleteUserCascade(c.env.DB, newUserId)
         return c.html(
-          <Layout title="??"><RegisterView settings={settings} error={used.message} /></Layout>,
+          <Layout title="注册"><RegisterView settings={settings} error={used.message} /></Layout>,
           { status: 400 }
         )
       }
@@ -556,15 +569,15 @@ app.post('/register', async (c) => {
     const data = await res.json().catch(() => ({}))
     const message =
       (data as { message?: string }).message ||
-      (res.status === 422 ? '???????' : '????')
+      (res.status === 422 ? '该邮箱已注册' : '注册失败')
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
       { status: res.status as 400 | 401 | 422 }
     )
   } catch (err) {
-    const message = err instanceof Error ? err.message : '????'
+    const message = err instanceof Error ? err.message : '注册失败'
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
       { status: 500 }
     )
   }
@@ -610,7 +623,7 @@ app.post('/verify-email', async (c) => {
     )
   }
 
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   try {
     const res = await auth.api.signUpEmail({
       body: { name: row.name, email, password: row.password },
@@ -651,7 +664,7 @@ app.post('/register/github', async (c) => {
   }
   if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET) {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error="GitHub OAuth ???" /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error="GitHub OAuth 未配置" /></Layout>,
       { status: 500 }
     )
   }
@@ -660,11 +673,11 @@ app.post('/register/github', async (c) => {
   const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, inviteCode)
   if (!inviteCheck.ok) {
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error={inviteCheck.message} /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error={inviteCheck.message} /></Layout>,
       { status: 400 }
     )
   }
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   const res = await auth.api.signInSocial({
     body: {
       provider: 'github',
@@ -693,7 +706,7 @@ app.get('/register/github/done', async (c) => {
   if (!user) {
     return redirectWithHeaders('/login', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
   }
-  // ?????? GitHub account ? accessToken ????
+// 读取 GitHub account 的 accessToken 做账号年龄校验
   const account = await c.env.DB
     .prepare("SELECT accessToken FROM account WHERE userId = ? AND providerId = 'github' ORDER BY updatedAt DESC LIMIT 1")
     .bind(user.id)
@@ -702,7 +715,7 @@ app.get('/register/github/done', async (c) => {
   const failInvite = async (message: string, status: 400 | 403 = 400) => {
     await deleteUserCascade(c.env.DB, user.id)
     return c.html(
-      <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
+      <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
       { status, headers: { 'Set-Cookie': clearInviteCookie } }
     )
   }
@@ -711,13 +724,13 @@ app.get('/register/github/done', async (c) => {
     const ghUser = await getGitHubUser(account.accessToken)
     if (ghUser && !meetsAgeRequirement(ghUser.created_at, settings.github_min_account_age_days)) {
       return await failInvite(
-        `?? GitHub ???????????????? ${settings.github_min_account_age_days} ??`,
+        `该 GitHub 账号注册天数不足，至少需要 ${settings.github_min_account_age_days} 天`,
         403
       )
     }
   }
 
-  // GitHub ????????/????????????????
+// GitHub 登录后对新用户消耗邀请码
   const createdAtMs = new Date(user.createdAt).getTime()
   const isNewUser = Number.isFinite(createdAtMs) && Date.now() - createdAtMs < 5 * 60 * 1000
   if (settings.invite_required && isNewUser) {
@@ -732,7 +745,7 @@ app.get('/register/github/done', async (c) => {
 
 // ---------- 退出 ----------
 app.on(['GET', 'POST'], '/logout', async (c) => {
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   try {
     const res = await auth.api.signOut({ headers: c.req.raw.headers, asResponse: true })
     return redirectWithHeaders('/login', 302, res.headers)
@@ -759,28 +772,33 @@ app.post('/dns/:id/delete', async (c) => {
 app.get('/admin', async (c) => {
   const user = await requireAdmin(c.env, c.req.raw.headers)
   if (!user) return c.redirect('/')
-  const [users, records, settings, inviteCodes] = await Promise.all([
+  const [users, records, settings, inviteCodes, oauthProviders] = await Promise.all([
     listAllUsers(c.env.DB),
     listAllRecords(c.env.DB),
     getSettings(c.env.DB),
-    listInviteCodes(c.env.DB)
+    listInviteCodes(c.env.DB),
+    listOAuthProviders(c.env.DB)
   ])
   return c.html(
-    <Layout title="????">
+    <Layout title="管理后台">
       <AdminView
         users={users}
         records={records}
         settings={settings}
         inviteCodes={inviteCodes}
+        oauthProviders={oauthProviders}
         currentUserId={user.id}
         currentUserSuperAdmin={isSuperAdminUser(user)}
         createError={c.req.query('create_error') ?? undefined}
         inviteError={c.req.query('invite_error') ?? undefined}
         inviteInfo={c.req.query('invite_info') ?? undefined}
+        oauthError={c.req.query('oauth_error') ?? undefined}
+        oauthInfo={c.req.query('oauth_info') ?? undefined}
       />
     </Layout>
   )
 })
+
 app.post('/admin/settings', async (c) => {
   const admin = await requireAdmin(c.env, c.req.raw.headers)
   if (!admin) return c.redirect('/')
@@ -892,7 +910,7 @@ app.post('/admin/users/create', async (c) => {
     return c.redirect('/admin?create_error=' + encodeURIComponent('参数不完整或密码少于8位'))
   }
 
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   try {
     const signUpRes = await auth.api.signUpEmail({
       body: { name, email, password },
@@ -931,16 +949,16 @@ app.post('/admin/dns/:id/delete', async (c) => {
 app.post('/admin/invites/create', async (c) => {
   const admin = await requireAdmin(c.env, c.req.raw.headers)
   if (!admin) return c.redirect('/')
-  // ????/?????????requireAdmin ??? role=admin
+// 仅管理员/超级管理员可生成(requireAdmin 已校验 role=admin)
   const settings = await getSettings(c.env.DB)
   if (!settings.invite_required) {
-    return c.redirect('/admin?invite_error=' + encodeURIComponent('?????????'))
+    return c.redirect('/admin?invite_error=' + encodeURIComponent('请先开启邀请码注册'))
   }
   try {
     const created = await createInviteCode(c.env.DB, admin.id)
-    return c.redirect('/admin?invite_info=' + encodeURIComponent(`?????? ${created.code}`))
+    return c.redirect('/admin?invite_info=' + encodeURIComponent(`已生成邀请码 ${created.code}`))
   } catch (err) {
-    const msg = err instanceof Error ? err.message : '???????'
+    const msg = err instanceof Error ? err.message : '生成邀请码失败'
     return c.redirect('/admin?invite_error=' + encodeURIComponent(msg))
   }
 })
@@ -953,7 +971,187 @@ app.post('/admin/invites/:id/revoke', async (c) => {
   if (!result.ok) {
     return c.redirect('/admin?invite_error=' + encodeURIComponent(result.message))
   }
-  return c.redirect('/admin?invite_info=' + encodeURIComponent('??????'))
+  return c.redirect('/admin?invite_info=' + encodeURIComponent('邀请码已作废'))
+})
+
+
+// ---------- 通用 OAuth 登录 / 注册 ----------
+app.post('/login/oauth', async (c) => {
+  const user = await getCurrentUser(c.env, c.req.raw.headers)
+  const next = c.req.query('next') || '/'
+  if (user) return c.redirect(next)
+  const form = await c.req.formData()
+  const providerId = String(form.get('provider_id') ?? '').trim()
+  if (!providerId) {
+    return c.redirect('/login?error=' + encodeURIComponent('请选择 OAuth 应用'))
+  }
+  const auth = await createAuth(c.env)
+  try {
+    // genericOAuth endpoint
+    const res = await (auth.api as any).signInWithOAuth2({
+      body: {
+        providerId,
+        callbackURL: next,
+        errorCallbackURL: '/login?error=' + encodeURIComponent('OAuth 登录失败')
+      },
+      headers: c.req.raw.headers,
+      asResponse: true
+    })
+    return res
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'OAuth 登录失败'
+    return c.redirect('/login?error=' + encodeURIComponent(msg))
+  }
+})
+
+app.post('/register/oauth', async (c) => {
+  const user = await getCurrentUser(c.env, c.req.raw.headers)
+  if (user) return c.redirect('/')
+  const settings = await getSettings(c.env.DB)
+  if (!settings.registration_enabled) {
+    return c.redirect('/register')
+  }
+  const form = await c.req.formData()
+  const providerId = String(form.get('provider_id') ?? '').trim()
+  const inviteCode = String(form.get('invite_code') ?? '').trim()
+  if (!providerId) {
+    return c.html(
+      <Layout title="注册"><RegisterView settings={settings} oauthProviders={await listPublicOAuthProviders(c.env.DB)} error="请选择 OAuth 应用" /></Layout>,
+      { status: 400 }
+    )
+  }
+  const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, inviteCode)
+  if (!inviteCheck.ok) {
+    return c.html(
+      <Layout title="注册"><RegisterView settings={settings} oauthProviders={await listPublicOAuthProviders(c.env.DB)} error={inviteCheck.message} /></Layout>,
+      { status: 400 }
+    )
+  }
+  const auth = await createAuth(c.env)
+  try {
+    const res = await (auth.api as any).signInWithOAuth2({
+      body: {
+        providerId,
+        callbackURL: '/register/oauth/done',
+        errorCallbackURL: '/register?error=' + encodeURIComponent('OAuth 登录失败')
+      },
+      headers: c.req.raw.headers,
+      asResponse: true
+    })
+    if (inviteCheck.code) {
+      const headers = new Headers(res.headers)
+      headers.append(
+        'Set-Cookie',
+        `pending_invite_code=${encodeURIComponent(inviteCheck.code)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1800`
+      )
+      return new Response(res.body, { status: res.status, headers })
+    }
+    return res
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'OAuth 登录失败'
+    return c.html(
+      <Layout title="注册"><RegisterView settings={settings} oauthProviders={await listPublicOAuthProviders(c.env.DB)} error={msg} /></Layout>,
+      { status: 500 }
+    )
+  }
+})
+
+app.get('/register/oauth/done', async (c) => {
+  const user = await getCurrentUser(c.env, c.req.raw.headers)
+  const settings = await getSettings(c.env.DB)
+  const cookieHeader = c.req.header('Cookie') || ''
+  const pendingInvite = parseCookie(cookieHeader, 'pending_invite_code')
+  const clearInviteCookie = 'pending_invite_code=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
+  if (!user) {
+    return redirectWithHeaders('/login', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
+  }
+  const createdAtMs = new Date(user.createdAt).getTime()
+  const isNewUser = Number.isFinite(createdAtMs) && Date.now() - createdAtMs < 5 * 60 * 1000
+  if (settings.invite_required && isNewUser) {
+    const used = await finalizeInviteUsage(c.env.DB, pendingInvite, user.id)
+    if (!used.ok) {
+      await deleteUserCascade(c.env.DB, user.id)
+      return c.html(
+        <Layout title="注册">
+          <RegisterView
+            settings={settings}
+            oauthProviders={await listPublicOAuthProviders(c.env.DB)}
+            error={used.message}
+          />
+        </Layout>,
+        { status: 400, headers: { 'Set-Cookie': clearInviteCookie } }
+      )
+    }
+  }
+  return redirectWithHeaders('/', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
+})
+
+// ---------- OAuth 管理（后台） ----------
+app.post('/admin/oauth/create', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const form = await c.req.formData()
+  const result = await createOAuthProvider(c.env.DB, {
+    provider_id: String(form.get('provider_id') ?? ''),
+    name: String(form.get('name') ?? ''),
+    client_id: String(form.get('client_id') ?? ''),
+    client_secret: String(form.get('client_secret') ?? ''),
+    discovery_url: String(form.get('discovery_url') ?? ''),
+    authorization_url: String(form.get('authorization_url') ?? ''),
+    token_url: String(form.get('token_url') ?? ''),
+    user_info_url: String(form.get('user_info_url') ?? ''),
+    scopes: String(form.get('scopes') ?? 'openid,profile,email'),
+    pkce: form.get('pkce') === 'on',
+    enabled: form.get('enabled') === 'on',
+    sort_order: Number(form.get('sort_order') ?? 0)
+  })
+  if (!result.ok) {
+    return c.redirect('/admin?oauth_error=' + encodeURIComponent(result.message))
+  }
+  return c.redirect('/admin?oauth_info=' + encodeURIComponent(`已添加 OAuth 应用 ${result.provider.name}`))
+})
+
+app.post('/admin/oauth/:id/update', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const id = c.req.param('id')
+  const form = await c.req.formData()
+  const result = await updateOAuthProvider(c.env.DB, id, {
+    provider_id: String(form.get('provider_id') ?? ''),
+    name: String(form.get('name') ?? ''),
+    client_id: String(form.get('client_id') ?? ''),
+    client_secret: String(form.get('client_secret') ?? ''),
+    discovery_url: String(form.get('discovery_url') ?? ''),
+    authorization_url: String(form.get('authorization_url') ?? ''),
+    token_url: String(form.get('token_url') ?? ''),
+    user_info_url: String(form.get('user_info_url') ?? ''),
+    scopes: String(form.get('scopes') ?? 'openid,profile,email'),
+    pkce: form.get('pkce') === 'on',
+    enabled: form.get('enabled') === 'on',
+    sort_order: Number(form.get('sort_order') ?? 0)
+  })
+  if (!result.ok) {
+    return c.redirect('/admin?oauth_error=' + encodeURIComponent(result.message))
+  }
+  return c.redirect('/admin?oauth_info=' + encodeURIComponent('OAuth 应用已更新'))
+})
+
+app.post('/admin/oauth/:id/toggle', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const id = c.req.param('id')
+  const form = await c.req.formData()
+  const enabled = form.get('enabled') === '1'
+  await setOAuthProviderEnabled(c.env.DB, id, enabled)
+  return c.redirect('/admin?oauth_info=' + encodeURIComponent(enabled ? '已启用' : '已禁用'))
+})
+
+app.post('/admin/oauth/:id/delete', async (c) => {
+  const admin = await requireAdmin(c.env, c.req.raw.headers)
+  if (!admin) return c.redirect('/')
+  const id = c.req.param('id')
+  await deleteOAuthProvider(c.env.DB, id)
+  return c.redirect('/admin?oauth_info=' + encodeURIComponent('OAuth 应用已删除'))
 })
 
 export default app
@@ -1298,3 +1496,5 @@ function isCloudflareErrorResponse(value: unknown): value is { errors?: Cloudfla
 function getCloudflareErrorMessage(errors: CloudflareError[] | undefined): string {
   return errors?.map((error) => error.message).filter(Boolean).join('; ') || 'Cloudflare 返回未知错误'
 }
+
+

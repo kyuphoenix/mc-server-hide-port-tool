@@ -1,6 +1,12 @@
 import type { FC } from 'hono/jsx'
+import type { OAuthProviderPublic } from '../services/oauth-providers'
 
-export const LoginView: FC<{ error?: string; next?: string; info?: string }> = ({ error, next, info }) => {
+export const LoginView: FC<{
+  error?: string
+  next?: string
+  info?: string
+  oauthProviders?: OAuthProviderPublic[]
+}> = ({ error, next, info, oauthProviders = [] }) => {
   return (
     <div class="min-h-screen flex items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
       <div class="w-full max-w-md bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-2xl p-8 shadow-2xl shadow-emerald-950/20">
@@ -68,6 +74,29 @@ export const LoginView: FC<{ error?: string; next?: string; info?: string }> = (
             登录
           </button>
         </form>
+
+
+        {oauthProviders.length > 0 && (
+          <div class="mt-6 space-y-3">
+            <div class="relative flex items-center justify-center my-2">
+              <div class="absolute inset-0 flex items-center">
+                <div class="w-full border-t border-slate-800"></div>
+              </div>
+              <span class="relative px-3 bg-slate-900 text-xs text-slate-500 uppercase tracking-wider">第三方登录</span>
+            </div>
+            {oauthProviders.map((p) => (
+              <form method="post" action={`/login/oauth${next ? `?next=${encodeURIComponent(next)}` : ''}`}>
+                <input type="hidden" name="provider_id" value={p.provider_id} />
+                <button
+                  type="submit"
+                  class="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl transition duration-200 border border-slate-700 shadow-md active:scale-[0.98]"
+                >
+                  使用 {p.name} 登录
+                </button>
+              </form>
+            ))}
+          </div>
+        )}
 
         <div class="mt-8 pt-6 border-t border-slate-800/60 text-center">
           <p class="text-sm text-slate-400">

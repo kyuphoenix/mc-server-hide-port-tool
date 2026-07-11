@@ -1,5 +1,10 @@
-import { betterAuth } from 'better-auth'
-import { github } from 'better-auth/social-providers'
+﻿import { betterAuth } from 'better-auth'
+import { genericOAuth } from 'better-auth/plugins'
+import {
+  listEnabledOAuthProviders,
+  toGenericOAuthConfig,
+  type OAuthProviderRow
+} from './services/oauth-providers'
 
 export type AuthBindings = {
   DB: D1Database
@@ -10,10 +15,18 @@ export type AuthBindings = {
   GITHUB_CLIENT_SECRET?: string
 }
 
-export type Auth = ReturnType<typeof createAuth>
+export type Auth = ReturnType<typeof betterAuth>
 
-export function createAuth(env: AuthBindings) {
-  const githubConfigured = env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
+export async function createAuth(
+  env: AuthBindings,
+  oauthProviders?: OAuthProviderRow[]
+) {
+  const githubConfigured = !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET)
+  const providers =
+    oauthProviders ?? (await listEnabledOAuthProviders(env.DB).catch(() => [] as OAuthProviderRow[]))
+
+  const genericConfigs = providers.map(toGenericOAuthConfig)
+
   return betterAuth({
     appName: env.APP_NAME || 'hide-port-tool',
     baseURL: env.BETTER_AUTH_URL,
@@ -54,7 +67,15 @@ export function createAuth(env: AuthBindings) {
             scope: ['user:email']
           }
         }
-      : undefined
+      : undefined,
+    plugins:
+      genericConfigs.length > 0
+        ? [
+            genericOAuth({
+              config: genericConfigs
+            })
+          ]
+        : []
   })
 }
 
@@ -77,7 +98,7 @@ export type AuthSession = {
 }
 
 export async function getCurrentSession(env: AuthBindings, headers: Headers): Promise<AuthSession | null> {
-  const auth = createAuth(env)
+  const auth = await createAuth(env)
   return await auth.api.getSession({ headers })
 }
 

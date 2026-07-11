@@ -181,3 +181,12 @@ scripts/
 docs/
   deploy-github-actions.md            # GitHub Actions 部署详细说明
 ```
+
+## Admin limits / Invite codes / Generic OAuth
+
+- Super admin and admin DNS create limits are unlimited and ignore global `max_records_per_user` / `min_subdomain_length`.
+- Only super admin can promote/demote admins; normal admin cannot demote/delete admins or touch super admin.
+- Optional invite registration via `invite_required`; only admin/super-admin can generate invite codes when enabled.
+- Generic OAuth apps are stored in D1 table `oauth_provider` (migration `0004_oauth_providers.sql`) and injected into better-auth `genericOAuth` at runtime.
+- Callback URL: `BETTER_AUTH_URL/api/auth/oauth2/callback/<provider_id>`.
+- Apply migrations: `pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local` (and `--remote` for production).

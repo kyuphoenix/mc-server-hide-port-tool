@@ -1,6 +1,7 @@
 import type { FC } from 'hono/jsx'
 import type { DnsRecordRow, UserListRow } from '../services/dns-records'
 import type { InviteCodeRow } from '../services/invite-codes'
+import type { OAuthProviderRow } from '../services/oauth-providers'
 import type { Settings } from '../services/settings'
 
 export const AdminView: FC<{
@@ -8,12 +9,15 @@ export const AdminView: FC<{
   records: DnsRecordRow[]
   settings: Settings
   inviteCodes: InviteCodeRow[]
+  oauthProviders: OAuthProviderRow[]
   currentUserId: string
   currentUserSuperAdmin: boolean
   createError?: string
   inviteError?: string
   inviteInfo?: string
-}> = ({ users, records, settings, inviteCodes, currentUserId, currentUserSuperAdmin, createError, inviteError, inviteInfo }) => {
+  oauthError?: string
+  oauthInfo?: string
+}> = ({ users, records, settings, inviteCodes, oauthProviders, currentUserId, currentUserSuperAdmin, createError, inviteError, inviteInfo, oauthError, oauthInfo }) => {
   return (
     <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-16">
       {/* Navigation Header */}
@@ -88,7 +92,7 @@ export const AdminView: FC<{
                     checked={settings.invite_required} 
                     class="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 bg-slate-950 border-slate-800"
                   />
-                  <label for="invite_required" class="text-sm font-medium text-slate-200 cursor-pointer">???????</label>
+                  <label for="invite_required" class="text-sm font-medium text-slate-200 cursor-pointer">开启邀请码注册</label>
                 </div>
 
                 <div>
@@ -236,6 +240,155 @@ export const AdminView: FC<{
         </section>
 
         
+        
+        {/* OAuth Providers Section */}
+        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+          <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
+            <h3 class="text-xl font-bold text-white flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 1.105-.895 2-2 2s-2-.895-2-2 .895-2 2-2 2 .895 2 2zm8 0c0 1.105-.895 2-2 2s-2-.895-2-2 .895-2 2-2 2 .895 2 2zM6 19v-1a4 4 0 014-4h4a4 4 0 014 4v1" />
+              </svg>
+              OAuth 登录应用 ({oauthProviders.length})
+            </h3>
+            <span class="text-xs text-slate-500">基于 better-auth genericOAuth，填写详情即可接入第三方登录</span>
+          </div>
+
+          {oauthError && (
+            <div class="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-sm text-rose-400">{oauthError}</div>
+          )}
+          {oauthInfo && (
+            <div class="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400">{oauthInfo}</div>
+          )}
+
+          <div class="mb-8 p-5 bg-slate-950/40 rounded-xl border border-slate-800/80">
+            <h4 class="text-sm font-bold text-white mb-4">添加 OAuth 应用</h4>
+            <form method="post" action="/admin/oauth/create" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Provider ID</label>
+                <input name="provider_id" required placeholder="oidc-corp" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">显示名称</label>
+                <input name="name" required placeholder="Corp SSO" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Client ID</label>
+                <input name="client_id" required class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Client Secret</label>
+                <input name="client_secret" required type="password" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Discovery URL (推荐)</label>
+                <input name="discovery_url" placeholder="https://issuer.example.com/.well-known/openid-configuration" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Authorization URL</label>
+                <input name="authorization_url" placeholder="optional if discovery" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Token URL</label>
+                <input name="token_url" placeholder="optional if discovery" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">UserInfo URL</label>
+                <input name="user_info_url" placeholder="optional" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Scopes</label>
+                <input name="scopes" value="openid,profile,email" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Sort</label>
+                <input name="sort_order" type="number" value="0" class="w-full px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
+              </div>
+              <div class="md:col-span-2 flex flex-wrap items-center gap-4">
+                <label class="inline-flex items-center gap-2 text-sm text-slate-300">
+                  <input type="checkbox" name="pkce" checked class="w-4 h-4 rounded text-emerald-600 bg-slate-950 border-slate-800" />
+                  PKCE
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm text-slate-300">
+                  <input type="checkbox" name="enabled" checked class="w-4 h-4 rounded text-emerald-600 bg-slate-950 border-slate-800" />
+                  启用
+                </label>
+                <button type="submit" class="ml-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg transition">添加 OAuth</button>
+              </div>
+            </form>
+            <p class="mt-3 text-xs text-slate-500">回调地址格式：BETTER_AUTH_URL/api/auth/oauth2/callback/&lt;provider_id&gt;</p>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  <th class="py-4 px-4">Provider</th>
+                  <th class="py-4 px-4">名称</th>
+                  <th class="py-4 px-4">状态</th>
+                  <th class="py-4 px-4">Endpoints</th>
+                  <th class="py-4 px-4 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60">
+                {oauthProviders.length === 0 ? (
+                  <tr>
+                    <td colspan={5} class="py-8 px-4 text-center text-slate-500">暂无 OAuth 应用</td>
+                  </tr>
+                ) : (
+                  oauthProviders.map((p) => (
+                    <tr class="hover:bg-slate-900/40 transition align-top">
+                      <td class="py-4 px-4 font-mono-custom text-emerald-400 text-xs">{p.provider_id}</td>
+                      <td class="py-4 px-4 text-white">{p.name}</td>
+                      <td class="py-4 px-4">
+                        <span class={`px-2 py-0.5 rounded text-xs font-semibold border ${p.enabled ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+                          {p.enabled ? '启用' : '禁用'}
+                        </span>
+                        {p.pkce ? <div class="text-[11px] text-slate-500 mt-1">PKCE</div> : null}
+                      </td>
+                      <td class="py-4 px-4 text-[11px] text-slate-400 font-mono-custom break-all space-y-1">
+                        {p.discovery_url ? <div>discovery: {p.discovery_url}</div> : null}
+                        {p.authorization_url ? <div>auth: {p.authorization_url}</div> : null}
+                        {p.token_url ? <div>token: {p.token_url}</div> : null}
+                        {p.user_info_url ? <div>userinfo: {p.user_info_url}</div> : null}
+                      </td>
+                      <td class="py-4 px-4 text-right space-y-2">
+                        <form method="post" action={`/admin/oauth/${p.id}/toggle`} class="inline">
+                          <input type="hidden" name="enabled" value={p.enabled ? '0' : '1'} />
+                          <button type="submit" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition">
+                            {p.enabled ? '禁用' : '启用'}
+                          </button>
+                        </form>
+                        <details class="text-left">
+                          <summary class="cursor-pointer text-xs text-emerald-400">编辑</summary>
+                          <form method="post" action={`/admin/oauth/${p.id}/update`} class="mt-2 space-y-2 p-3 bg-slate-950/50 border border-slate-800 rounded-lg">
+                            <input name="provider_id" value={p.provider_id} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" />
+                            <input name="name" value={p.name} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white" />
+                            <input name="client_id" value={p.client_id} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" />
+                            <input name="client_secret" type="password" placeholder="leave blank to keep" class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" />
+                            <input name="discovery_url" value={p.discovery_url ?? ''} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" placeholder="discovery_url" />
+                            <input name="authorization_url" value={p.authorization_url ?? ''} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" placeholder="authorization_url" />
+                            <input name="token_url" value={p.token_url ?? ''} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" placeholder="token_url" />
+                            <input name="user_info_url" value={p.user_info_url ?? ''} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" placeholder="user_info_url" />
+                            <input name="scopes" value={p.scopes} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" />
+                            <input name="sort_order" type="number" value={p.sort_order} class="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white font-mono-custom" />
+                            <label class="inline-flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" name="pkce" checked={!!p.pkce} /> PKCE</label>
+                            <label class="inline-flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" name="enabled" checked={!!p.enabled} /> 启用</label>
+                            <button type="submit" class="block w-full px-2 py-1 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded">保存</button>
+                          </form>
+                        </details>
+                        <form method="post" action={`/admin/oauth/${p.id}/delete`} class="inline" onsubmit="return confirm('delete oauth app?');">
+                          <button type="submit" class="px-2.5 py-1 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition">删除</button>
+                        </form>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+
         {/* Invite Codes Section */}
         <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
@@ -243,9 +396,9 @@ export const AdminView: FC<{
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
               </svg>
-              ????? ({inviteCodes.length})
+              邀请码管理 ({inviteCodes.length})
             </h3>
-            <span class="text-xs text-slate-500">????????????????????????</span>
+            <span class="text-xs text-slate-500">仅管理员/超级管理员可生成；开启邀请码注册后生效</span>
           </div>
 
           {inviteError && (
@@ -261,12 +414,10 @@ export const AdminView: FC<{
                 type="submit"
                 disabled={!settings.invite_required}
                 class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded-lg transition active:scale-[0.98]"
-              >
-                ?????
-              </button>
+              >生成邀请码</button>
             </form>
             {!settings.invite_required && (
-              <span class="text-xs text-slate-500">??????????????</span>
+              <span class="text-xs text-slate-500">请先开启邀请码注册后再生成</span>
             )}
           </div>
 
@@ -274,22 +425,22 @@ export const AdminView: FC<{
             <table class="w-full text-sm text-left border-collapse">
               <thead>
                 <tr class="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  <th class="py-4 px-4">???</th>
-                  <th class="py-4 px-4">??</th>
-                  <th class="py-4 px-4">???</th>
-                  <th class="py-4 px-4">???</th>
-                  <th class="py-4 px-4">????</th>
-                  <th class="py-4 px-4 text-right">??</th>
+                  <th class="py-4 px-4">邀请码</th>
+                  <th class="py-4 px-4">状态</th>
+                  <th class="py-4 px-4">创建者</th>
+                  <th class="py-4 px-4">使用者</th>
+                  <th class="py-4 px-4">创建时间</th>
+                  <th class="py-4 px-4 text-right">操作</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-800/60">
                 {inviteCodes.length === 0 ? (
                   <tr>
-                    <td colspan={6} class="py-8 px-4 text-center text-slate-500">?????</td>
+                    <td colspan={6} class="py-8 px-4 text-center text-slate-500">暂无邀请码</td>
                   </tr>
                 ) : (
                   inviteCodes.map((code) => {
-                    const status = code.revoked ? '???' : code.used_by ? '???' : '???'
+                    const status = code.revoked ? '已作废' : code.used_by ? '已使用' : '未使用'
                     const statusClass = code.revoked
                       ? 'bg-slate-800 text-slate-400 border-slate-700'
                       : code.used_by
@@ -319,9 +470,7 @@ export const AdminView: FC<{
                         <td class="py-4 px-4 text-right">
                           {!code.used_by && !code.revoked ? (
                             <form method="post" action={`/admin/invites/${code.id}/revoke`} class="inline">
-                              <button type="submit" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition">
-                                Revoke
-                              </button>
+                              <button type="submit" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition">作废</button>
                             </form>
                           ) : (
                             <span class="text-xs text-slate-600">-</span>

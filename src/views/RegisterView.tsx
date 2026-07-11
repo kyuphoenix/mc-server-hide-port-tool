@@ -1,5 +1,6 @@
 import type { FC } from 'hono/jsx'
 import type { Settings } from '../services/settings'
+import type { OAuthProviderPublic } from '../services/oauth-providers'
 
 export const RegisterView: FC<{
   settings: Settings
@@ -7,7 +8,8 @@ export const RegisterView: FC<{
   info?: string
   askCode?: boolean
   email?: string
-}> = ({ settings, error, info, askCode, email }) => {
+  oauthProviders?: OAuthProviderPublic[]
+}> = ({ settings, error, info, askCode, email, oauthProviders = [] }) => {
   const showEmail = settings.registration_mode === 'email' || settings.registration_mode === 'both'
   const showGithub =
     (settings.registration_mode === 'github' || settings.registration_mode === 'both') &&
@@ -111,7 +113,7 @@ export const RegisterView: FC<{
 
             {settings.invite_required && (
               <div>
-                <label for="invite_code" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">???</label>
+                <label for="invite_code" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">邀请码</label>
                 <input
                   type="text"
                   id="invite_code"
@@ -180,7 +182,7 @@ export const RegisterView: FC<{
             <form method="post" action="/register/github">
               {settings.invite_required && (
                 <div class="mb-3">
-                  <label for="github_invite_code" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">???</label>
+                  <label for="github_invite_code" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">邀请码</label>
                   <input
                     type="text"
                     id="github_invite_code"
@@ -210,7 +212,42 @@ export const RegisterView: FC<{
           </div>
         )}
 
-        <div class="mt-8 pt-6 border-t border-slate-800/60 text-center">
+        
+        {settings.registration_enabled && oauthProviders.length > 0 && (
+          <div class="mt-6 space-y-3">
+            <div class="relative flex items-center justify-center my-2">
+              <div class="absolute inset-0 flex items-center">
+                <div class="w-full border-t border-slate-800"></div>
+              </div>
+              <span class="relative px-3 bg-slate-900 text-xs text-slate-500 uppercase tracking-wider">第三方登录</span>
+            </div>
+            {settings.invite_required && (
+              <p class="text-xs text-slate-500 text-center">使用第三方注册时也需要填写邀请码</p>
+            )}
+            {oauthProviders.map((p) => (
+              <form method="post" action="/register/oauth" class="space-y-2">
+                <input type="hidden" name="provider_id" value={p.provider_id} />
+                {settings.invite_required && (
+                  <input
+                    type="text"
+                    name="invite_code"
+                    required
+                    placeholder="邀请码"
+                    class="w-full px-4 py-2 bg-slate-950/60 border border-slate-800 rounded-xl text-white font-mono-custom tracking-widest focus:outline-none focus:border-emerald-500"
+                  />
+                )}
+                <button
+                  type="submit"
+                  class="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl transition duration-200 border border-slate-700 shadow-md active:scale-[0.98]"
+                >
+                  使用 {p.name} 注册 / 登录
+                </button>
+              </form>
+            ))}
+          </div>
+        )}
+
+<div class="mt-8 pt-6 border-t border-slate-800/60 text-center">
           <p class="text-sm text-slate-400">
             已有账号？{" "}
             <a href="/login" class="font-medium text-emerald-400 hover:text-emerald-300 transition">
