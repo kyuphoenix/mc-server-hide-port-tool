@@ -17,6 +17,8 @@
 - **D1 持久化**：用户、会话、DNS 归属、验证码、设置、邀请码、OAuth 应用均存 Cloudflare D1
 - **GitHub Actions 一键部署**：自动创建 D1、应用迁移、注入 secrets/vars 并部署 Worker
 
+>本项目通过cloudflare api添加dns记录，因此不需要域名一定托管在部署worker的项目下，只需要域名托管在cloudflare，并且获取到具有修改dns权限的token，就能加入列表成功创建记录。
+
 ## 技术栈
 
 - 运行时：Cloudflare Workers（`nodejs_compat`）
@@ -31,75 +33,6 @@
 - pnpm
 - Cloudflare 账户，并已将至少一个根域名接入 Cloudflare DNS
 - 每个根域名一份具有 DNS 编辑权限的 Cloudflare API Token
-
-## 本地开发
-
-1. 安装依赖：
-
-```txt
-pnpm install
-```
-
-2. 创建 D1 数据库（首次）：
-
-```txt
-pnpm wrangler d1 create mc-server-hide-port-tool-db
-```
-
-将返回的 `database_id` 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id`（替换 `REPLACE_WITH_D1_DATABASE_ID`）。
-
-3. 应用迁移：
-
-```txt
-pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
-```
-
-迁移清单：
-
-- `0000_init.sql` — better-auth：`user` / `session` / `account` / `verification`
-- `0001_admin.sql` — `user.role`，以及 `dns_record` / `settings` / `email_verification`
-- `0002_super_admin_and_limits.sql` — `super_admin` / `record_limit`，以及全局记录/子域名限制
-- `0003_invite_codes.sql` — 邀请码
-- `0004_oauth_providers.sql` — 通用 OAuth 应用表
-- `0005_oauth_unify_github.sql` — OAuth `icon_url`；注册模式 `github` 归一为 `oauth`
-- `0006_schema_hardening.sql` — 唯一索引、冗余索引清理、过期字段索引
-
-4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
-
-```txt
-example_com_CLOUDFLARE_API_TOKEN=...
-example_net_CLOUDFLARE_API_TOKEN=...
-DOMAINS=["example.com","example.net"]
-BETTER_AUTH_SECRET=openssl rand -base64 32
-BETTER_AUTH_URL=http://localhost:8787
-```
-
-> 生产环境请用 `wrangler secret put ...` 注入密钥，不要写进 `wrangler.jsonc`。
->
-> OAuth（含 GitHub）**不走环境变量**，请在管理后台「OAuth 登录应用」中配置。
-
-5. 启动开发服务器：
-
-```txt
-pnpm dev
-```
-
-访问 `http://localhost:8787`：
-
-- **首次启动**（无用户）跳转 `/setup` 创建管理员
-- **之后未登录**跳转 `/login`；登录后普通用户管理自己的 DNS，管理员可进 `/admin`
-
-## 部署到生产
-
-```txt
-pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
-pnpm wrangler secret put example_com_CLOUDFLARE_API_TOKEN
-pnpm wrangler secret put example_net_CLOUDFLARE_API_TOKEN
-pnpm wrangler secret put BETTER_AUTH_SECRET
-pnpm deploy
-```
-
-部署后完成 onboarding，再到 `/admin` 配置注册方式、邀请码、Resend、OAuth、GitHub 天数限制等。
 
 ## 部署方法
 
@@ -150,6 +83,63 @@ https://your-domain.example/api/auth/oauth2/callback/github
    - `both`：邮箱 + OAuth
    - 旧值 `github` 读取时会归一为 `oauth`
 5. 未满足 GitHub 天数要求时，会跳转到 `/register/github-age-rejected`，不会创建本地账号。
+
+## 本地开发
+
+1. 安装依赖：
+
+```txt
+pnpm install
+```
+
+2. 创建 D1 数据库（首次）：
+
+```txt
+pnpm wrangler d1 create mc-server-hide-port-tool-db
+```
+
+将返回的 `database_id` 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id`（替换 `REPLACE_WITH_D1_DATABASE_ID`）。
+
+3. 应用迁移：
+
+```txt
+pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
+```
+
+迁移清单：
+
+- `0000_init.sql` — better-auth：`user` / `session` / `account` / `verification`
+- `0001_admin.sql` — `user.role`，以及 `dns_record` / `settings` / `email_verification`
+- `0002_super_admin_and_limits.sql` — `super_admin` / `record_limit`，以及全局记录/子域名限制
+- `0003_invite_codes.sql` — 邀请码
+- `0004_oauth_providers.sql` — 通用 OAuth 应用表
+- `0005_oauth_unify_github.sql` — OAuth `icon_url`；注册模式 `github` 归一为 `oauth`
+- `0006_schema_hardening.sql` — 唯一索引、冗余索引清理、过期字段索引
+
+4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
+
+```txt
+example_com_CLOUDFLARE_API_TOKEN=...
+example_net_CLOUDFLARE_API_TOKEN=...
+DOMAINS=["example.com","example.net"]
+BETTER_AUTH_SECRET=openssl rand -base64 32
+BETTER_AUTH_URL=http://localhost:8787
+```
+
+> 生产环境请用 `wrangler secret put ...` 注入密钥，不要写进 `wrangler.jsonc`。
+>
+> OAuth（含 GitHub）**不走环境变量**，请在管理后台「OAuth 登录应用」中配置。
+
+5. 启动开发服务器：
+
+```txt
+pnpm wrangler dev
+```
+
+访问 `http://localhost:8787`：
+
+- **首次启动**（无用户）跳转 `/setup` 创建管理员
+- **之后未登录**跳转 `/login`；登录后普通用户管理自己的 DNS，管理员可进 `/admin`
 
 ## 项目结构
 
