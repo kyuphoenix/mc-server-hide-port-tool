@@ -4,6 +4,36 @@ import type { InviteCodeRow } from '../services/invite-codes'
 import type { OAuthProviderRow, OAuthTemplate } from '../services/oauth-providers'
 import type { Settings } from '../services/settings'
 
+type AdminTab = 'settings' | 'oauth' | 'invites' | 'users' | 'dns'
+
+function formatEmailDisplay(email: string): { primary: string; full: string; isSynthetic: boolean } {
+  const full = email || ''
+  const lower = full.toLowerCase()
+  // better-auth / generic OAuth often fills missing emails with long reserved/synthetic addresses
+  const isSynthetic =
+    lower.includes('users.noreply') ||
+    lower.includes('noreply.') ||
+    lower.includes('@oauth.') ||
+    lower.includes('privateemail') ||
+    lower.endsWith('.local') ||
+    full.length > 42
+
+  if (!isSynthetic) {
+    return { primary: full, full, isSynthetic: false }
+  }
+
+  const at = full.indexOf('@')
+  if (at <= 0) {
+    const short = full.length > 28 ? full.slice(0, 12) + '…' + full.slice(-8) : full
+    return { primary: short, full, isSynthetic: true }
+  }
+  const local = full.slice(0, at)
+  const domain = full.slice(at + 1)
+  const localShort = local.length > 16 ? local.slice(0, 10) + '…' + local.slice(-4) : local
+  const domainShort = domain.length > 18 ? domain.slice(0, 10) + '…' + domain.slice(-6) : domain
+  return { primary: `${localShort}@${domainShort}`, full, isSynthetic: true }
+}
+
 export const AdminView: FC<{
   users: UserListRow[]
   records: DnsRecordRow[]
@@ -13,12 +43,18 @@ export const AdminView: FC<{
   oauthTemplates?: OAuthTemplate[]
   currentUserId: string
   currentUserSuperAdmin: boolean
+  activeTab?: AdminTab
   createError?: string
   inviteError?: string
   inviteInfo?: string
   oauthError?: string
   oauthInfo?: string
-}> = ({ users, records, settings, inviteCodes, oauthProviders, oauthTemplates = [], currentUserId, currentUserSuperAdmin, createError, inviteError, inviteInfo, oauthError, oauthInfo }) => {
+}> = ({ users, records, settings, inviteCodes, oauthProviders, oauthTemplates = [], currentUserId, currentUserSuperAdmin, activeTab = 'settings', createError, inviteError, inviteInfo, oauthError, oauthInfo }) => {
+  const tab = activeTab
+  const tabClass = (id: AdminTab) =>
+    tab === id
+      ? 'px-3 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white shadow-sm'
+      : 'px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/80 transition'
   return (
     <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-16">
       {/* Navigation Header */}
@@ -44,10 +80,19 @@ export const AdminView: FC<{
       </header>
 
       {/* Main Container */}
-      <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 space-y-10">
-        
+      <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 space-y-6">
+        <div class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-2 shadow-xl">
+          <nav class="flex flex-wrap gap-1">
+            <a href="/admin?tab=settings" class={tabClass('settings')}>全局设置</a>
+            <a href="/admin?tab=oauth" class={tabClass('oauth')}>OAuth 应用 ({oauthProviders.length})</a>
+            <a href="/admin?tab=invites" class={tabClass('invites')}>邀请码 ({inviteCodes.length})</a>
+            <a href="/admin?tab=users" class={tabClass('users')}>用户管理 ({users.length})</a>
+            <a href="/admin?tab=dns" class={tabClass('dns')}>DNS 记录 ({records.length})</a>
+          </nav>
+        </div>
+
         {/* Registration & Settings Section */}
-        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+        <section class={tab === 'settings' ? 'bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl' : 'hidden'}>
           <h3 class="text-xl font-bold text-white mb-6 pb-3 border-b border-slate-800 flex items-center gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -243,7 +288,7 @@ export const AdminView: FC<{
         
         
         {/* OAuth Providers Section */}
-        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+        <section class={tab === 'oauth' ? 'bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl' : 'hidden'}>
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
             <h3 class="text-xl font-bold text-white flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -441,7 +486,7 @@ export const AdminView: FC<{
 
 
         {/* Invite Codes Section */}
-        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+        <section class={tab === 'invites' ? 'bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl' : 'hidden'}>
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
             <h3 class="text-xl font-bold text-white flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -505,13 +550,13 @@ export const AdminView: FC<{
                         </td>
                         <td class="py-4 px-4 text-slate-300 text-xs">
                           {code.creator_name || code.created_by}
-                          {code.creator_email ? <div class="text-slate-500">{code.creator_email}</div> : null}
+                          {code.creator_email ? <div class="text-slate-500 truncate max-w-[12rem]" title={code.creator_email}>{formatEmailDisplay(code.creator_email).primary}</div> : null}
                         </td>
                         <td class="py-4 px-4 text-slate-300 text-xs">
                           {code.used_by ? (
                             <>
                               {code.used_name || code.used_by}
-                              {code.used_email ? <div class="text-slate-500">{code.used_email}</div> : null}
+                              {code.used_email ? <div class="text-slate-500 truncate max-w-[12rem]" title={code.used_email}>{formatEmailDisplay(code.used_email).primary}</div> : null}
                             </>
                           ) : (
                             <span class="text-slate-600">-</span>
@@ -537,7 +582,7 @@ export const AdminView: FC<{
         </section>
 
 {/* User Management Section */}
-        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+        <section class={tab === 'users' ? 'bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl' : 'hidden'}>
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
             <h3 class="text-xl font-bold text-white flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -613,7 +658,19 @@ export const AdminView: FC<{
                         <span class="ml-2 text-xs px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-normal">你</span>
                       )}
                     </td>
-                    <td class="py-4 px-4 font-mono-custom text-slate-300">{u.email}</td>
+                    <td class="py-4 px-4 font-mono-custom text-slate-300 max-w-[16rem]">
+                      {(() => {
+                        const e = formatEmailDisplay(u.email)
+                        return (
+                          <div class="min-w-0">
+                            <div class="truncate" title={e.full}>{e.primary}</div>
+                            {e.isSynthetic ? (
+                              <div class="text-[11px] text-slate-500 mt-0.5">OAuth 保留地址</div>
+                            ) : null}
+                          </div>
+                        )
+                      })()}
+                    </td>
                     <td class="py-4 px-4">
                       {isSuper ? (
                         <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">超级管理员</span>
@@ -686,7 +743,7 @@ export const AdminView: FC<{
         </section>
 
         {/* DNS Records Section */}
-        <section class="bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl">
+        <section class={tab === 'dns' ? 'bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-8 shadow-xl' : 'hidden'}>
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
             <h3 class="text-xl font-bold text-white flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">

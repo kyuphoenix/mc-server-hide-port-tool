@@ -28,16 +28,19 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
     const session = await getCurrentSession(c.env, c.req.raw.headers)
     let recordLimit: number | null = null
     let minSubdomainLength = Math.max(0, settings.min_subdomain_length)
+    let recordCount = 0
     if (session) {
       const userRow = await findUserById(c.env.DB, session.user.id)
       recordLimit = resolveUserRecordLimit(userRow, settings.max_records_per_user)
       minSubdomainLength = resolveMinSubdomainLength(userRow, settings.min_subdomain_length)
+      recordCount = await countRecordsByUser(c.env.DB, session.user.id)
     }
     return c.json({
       success: true,
       domains,
       min_subdomain_length: minSubdomainLength,
       record_limit: recordLimit,
+      record_count: recordCount,
       max_records_per_user: settings.max_records_per_user
     })
   })
@@ -67,27 +70,27 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       const token = getCloudflareApiToken(c.env, rootDomain)
       if (!token) {
         return c.json(
-          { success: false, message: `后端未配置根域名 ${rootDomain} 对应的 CLOUDFLARE_API_TOKEN` },
+          {
+            success: false,
+            message: '后端未配置根域名 ' + rootDomain + ' 对应的 CLOUDFLARE_API_TOKEN'
+          },
           500
         )
       }
 
-      // 子域名最小长度校验
       const settings = await getSettings(c.env.DB)
       const minLen = resolveMinSubdomainLength(userRow, settings.min_subdomain_length)
-      // subdomain 可包含多级如 play.mc，整体长度按用户填写的子域名原始字符串判断
       const subdomainInput = String((body as Record<string, unknown>).subdomain ?? '').trim()
       if (minLen > 0 && subdomainInput.length < minLen) {
         return c.json(
           {
             success: false,
-            message: `子域名长度不能少于 ${minLen} 个字符`
+            message: '子域名长度不能少于 ' + minLen + ' 个字符'
           },
           400
         )
       }
 
-      // 记录数上限校验
       const userRecordLimit = resolveUserRecordLimit(userRow, settings.max_records_per_user)
       if (userRecordLimit > 0) {
         const currentCount = await countRecordsByUser(c.env.DB, userId)
@@ -95,21 +98,24 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
           return c.json(
             {
               success: false,
-              message: `已达记录数量上限（${userRecordLimit} 条），无法继续创建`
+              message: '已达记录数量上限（' + userRecordLimit + ' 条），无法继续创建'
             },
             403
           )
         }
       }
 
-      const hostName = `${subdomain}.${rootDomain}`
-      const srvName = `_minecraft._tcp.${hostName}`
+      const hostName = subdomain + '.' + rootDomain
+      const srvName = '_minecraft._tcp.' + hostName
 
-      // D1 已被占用则直接拒绝（更快的本地校验）
       const existing = await findRecordByHostName(c.env.DB, hostName)
       if (existing) {
         return c.json(
-          { success: false, code: 'record_occupied', message: `域名 ${hostName} 已被占用，请换一个子域名` },
+          {
+            success: false,
+            code: 'record_occupied',
+            message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
+          },
           409
         )
       }
@@ -118,7 +124,11 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       const occupiedRecords = await findOccupiedRecords(token, zoneId, [hostName, srvName])
       if (occupiedRecords.length > 0) {
         return c.json(
-          { success: false, code: 'record_occupied', message: `域名 ${hostName} 已被占用，请换一个子域名` },
+          {
+            success: false,
+            code: 'record_occupied',
+            message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
+          },
           409
         )
       }
@@ -138,7 +148,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         data: { priority: 0, weight: 5, port, target: hostName }
       })
 
-      await insertRecord(c.env.DB, {
+      const row = await insertRecord(c.env.DB, {
         user_id: userId,
         root_domain: rootDomain,
         subdomain,
@@ -150,9 +160,20 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         srv_record_id: srvRecord.id
       })
 
+      const currentCount = await countRecordsByUser(c.env.DB, userId)
+
       return c.json({
         success: true,
-        message: `DNS 记录已创建：${hostName} -> ${serverAddress}，Minecraft Java 端口 ${port}`,
+        message:
+          'DNS 记录已创建：' +
+          hostName +
+          ' -> ' +
+          serverAddress +
+          '，Minecraft Java 端口 ' +
+          port,
+        record: row,
+        record_count: currentCount,
+        record_limit: userRecordLimit,
         records: { target: targetRecord, srv: srvRecord }
       })
     } catch (err) {
@@ -161,15 +182,41 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
   })
 
+  app.post('/api/dns/:id/delete', async (c) => {
+    const session = await getCurrentSession(c.env, c.req.raw.headers)
+    if (!session) {
+      return c.json({ success: false, message: '未登录，请先登录' }, 401)
+    }
+    const id = c.req.param('id')
+    const record = await findRecordById(c.env.DB, id)
+    if (!record) {
+      return c.json({ success: false, message: '记录不存在' }, 404)
+    }
+    if (record.user_id !== session.user.id) {
+      return c.json({ success: false, message: '无权删除该记录' }, 403)
+    }
+    await deleteRecordAndCloudflare(c.env, record)
+    const currentCount = await countRecordsByUser(c.env.DB, session.user.id)
+    const settings = await getSettings(c.env.DB)
+    const userRow = await findUserById(c.env.DB, session.user.id)
+    const recordLimit = resolveUserRecordLimit(userRow, settings.max_records_per_user)
+    return c.json({
+      success: true,
+      message: '记录已删除',
+      id,
+      record_count: currentCount,
+      record_limit: recordLimit
+    })
+  })
+
+  // 兼容旧表单提交
   app.post('/dns/:id/delete', async (c) => {
     const session = await getCurrentSession(c.env, c.req.raw.headers)
     if (!session) return c.redirect('/login')
     const id = c.req.param('id')
     const record = await findRecordById(c.env.DB, id)
     if (!record) return c.redirect('/')
-    if (record.user_id !== session.user.id) {
-      return c.redirect('/')
-    }
+    if (record.user_id !== session.user.id) return c.redirect('/')
     await deleteRecordAndCloudflare(c.env, record)
     return c.redirect('/')
   })

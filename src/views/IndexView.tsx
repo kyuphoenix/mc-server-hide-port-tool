@@ -116,7 +116,7 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
                 </svg>
-                我的记录 ({records.length})
+                <span id="records-title">我的记录 ({records.length})</span>
               </h3>
               <span id="record-count" class="hidden">{records.length}</span>
               <span class="text-xs text-slate-500">仅显示您名下的 DNS 解析记录</span>
@@ -135,24 +135,26 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
                     <th class="py-4 px-4 text-right">操作</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-800/60">
+                <tbody id="records-tbody" class="divide-y divide-slate-800/60">
                   {records.map((r) => (
-                    <tr class="hover:bg-slate-900/40 transition">
+                    <tr class="hover:bg-slate-900/40 transition" data-record-id={r.id}>
                       <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="点击即可选择复制">{r.host_name}</td>
                       <td class="py-4 px-4 font-mono-custom text-slate-300 break-all">{r.server_address}</td>
                       <td class="py-4 px-4 font-mono-custom text-slate-300">{r.port}</td>
                       <td class="py-4 px-4 text-slate-400 text-xs">{new Date(r.created_at).toLocaleString('zh-CN')}</td>
                       <td class="py-4 px-4 text-right">
-                        <form method="post" action={`/dns/${r.id}/delete`} class="inline" onsubmit="return confirm('确认删除？此操作也将从 Cloudflare DNS 中移除该解析');">
-                          <button type="submit" class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition active:scale-[0.98]">
-                            删除
-                          </button>
-                        </form>
+                        <button
+                          type="button"
+                          data-delete-id={r.id}
+                          class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition active:scale-[0.98]"
+                        >
+                          删除
+                        </button>
                       </td>
                     </tr>
                   ))}
                   {records.length === 0 && (
-                    <tr>
+                    <tr data-empty-row="1">
                       <td colSpan={5} class="py-12 text-center text-slate-500">
                         <div class="flex flex-col items-center justify-center gap-3">
                           <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
