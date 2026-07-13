@@ -20,6 +20,20 @@ import {
   parseCreateDnsRequest,
   type Bindings
 } from '../services/cloudflare-dns'
+import { isSameOriginMutation, verifyCsrfToken } from '../lib/security'
+
+
+async function requireDnsMutationAuth(c: any): Promise<Response | null> {
+  if (!isSameOriginMutation(c.req.raw)) {
+    return c.json({ success: false, message: 'Forbidden: invalid origin' }, 403)
+  }
+  const csrfHeader = c.req.header('x-csrf-token') || ''
+  // Cookie-authenticated JSON mutations must include CSRF header matching cookie.
+  if (!verifyCsrfToken(c.req.header('Cookie'), csrfHeader)) {
+    return c.json({ success: false, message: 'Forbidden: invalid CSRF token' }, 403)
+  }
+  return null
+}
 
 export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/api/domains', async (c) => {
@@ -51,6 +65,8 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       if (!session) {
         return c.json({ success: false, message: '未登录，请先登录' }, 401)
       }
+      const csrfDenied = await requireDnsMutationAuth(c)
+      if (csrfDenied) return csrfDenied
       const userId = session.user.id
       const userRow = await findUserById(c.env.DB, userId)
 
@@ -187,6 +203,8 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!session) {
       return c.json({ success: false, message: '未登录，请先登录' }, 401)
     }
+    const csrfDenied = await requireDnsMutationAuth(c)
+    if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     const record = await findRecordById(c.env.DB, id)
     if (!record) {

@@ -9,6 +9,7 @@ import {
   type PasskeyRow
 } from '../services/user-settings'
 import { redirectFromOAuthResponse } from '../lib/http'
+import { getRequestCsrf, requireMutationCsrf, withCsrfCookie } from '../lib/csrf'
 import type { Bindings } from '../services/cloudflare-dns'
 
 function settingsPath(query: Record<string, string | undefined> = {}): string {
@@ -46,7 +47,8 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
       listPasskeysForUser(auth, c.req.raw.headers)
     ])
 
-    return c.html(
+    const csrf = getRequestCsrf(c)
+    const html = c.html(
       <Layout title="个人设置">
         <SettingsView
           name={user.name}
@@ -61,16 +63,19 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
           oauthInfo={c.req.query('oauth_info') ?? undefined}
           passkeyError={c.req.query('passkey_error') ?? undefined}
           passkeyInfo={c.req.query('passkey_info') ?? undefined}
+          csrfToken={csrf.token}
         />
       </Layout>
     )
+    return withCsrfCookie(await html, csrf.setCookie)
   })
 
   app.post('/settings/profile', async (c) => {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login?next=' + encodeURIComponent('/settings'))
-
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const name = String(form.get('name') ?? '').trim()
     if (!name || name.length > 64) {
       return c.redirect(settingsPath({ profile_error: '用户名不能为空，且不超过 64 个字符' }))
@@ -84,13 +89,13 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || '更新用户名失败'
+    const data = await res.json().catch(() => ({}))
+    const msg = (data as { message?: string }).message || '更新用户名失败'
         return c.redirect(settingsPath({ profile_error: msg }), 302)
       }
       // ensure cookie headers from better-auth are preserved if present
       if (res.headers.get('set-cookie')) {
-        const headers = new Headers(res.headers)
+    const headers = new Headers(res.headers)
         headers.set('Location', settingsPath({ profile_info: '用户名已更新' }))
         return new Response(null, { status: 302, headers })
       }
@@ -104,8 +109,9 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/settings/oauth/link', async (c) => {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login?next=' + encodeURIComponent('/settings'))
-
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const providerId = String(form.get('provider_id') ?? '').trim()
     if (!providerId) {
       return c.redirect(settingsPath({ oauth_error: '请选择要绑定的 OAuth 应用' }))
@@ -145,8 +151,9 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/settings/oauth/unlink', async (c) => {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login?next=' + encodeURIComponent('/settings'))
-
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const providerId = String(form.get('provider_id') ?? '').trim()
     const accountId = String(form.get('account_id') ?? '').trim()
     if (!providerId) {
@@ -169,8 +176,8 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || '解绑失败'
+    const data = await res.json().catch(() => ({}))
+    const msg = (data as { message?: string }).message || '解绑失败'
         return c.redirect(settingsPath({ oauth_error: msg }))
       }
       return c.redirect(settingsPath({ oauth_info: '已解绑社交账号' }))
@@ -183,8 +190,9 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/settings/passkey/delete', async (c) => {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login?next=' + encodeURIComponent('/settings'))
-
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const id = String(form.get('id') ?? '').trim()
     if (!id) {
       return c.redirect(settingsPath({ passkey_error: '缺少 Passkey ID' }))
@@ -204,8 +212,8 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || '删除 Passkey 失败'
+    const data = await res.json().catch(() => ({}))
+    const msg = (data as { message?: string }).message || '删除 Passkey 失败'
         return c.redirect(settingsPath({ passkey_error: msg }))
       }
       return c.redirect(settingsPath({ passkey_info: 'Passkey 已删除' }))

@@ -12,7 +12,6 @@ import {
   listAllRecords,
   listAllUsers,
   listRecordsByUser,
-  setSuperAdmin,
   setUserRecordLimit,
   setUserRole
 } from '../services/dns-records'
@@ -31,6 +30,7 @@ import {
 } from '../services/oauth-providers'
 import { deleteRecordAndCloudflare, type Bindings } from '../services/cloudflare-dns'
 import { splitCsv } from '../lib/http'
+import { getRequestCsrf, requireMutationCsrf, withCsrfCookie } from '../lib/csrf'
 
 type AdminTab = 'settings' | 'oauth' | 'invites' | 'users' | 'dns'
 
@@ -54,7 +54,6 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/admin', async (c) => {
     const user = await requireAdmin(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/')
-    // 若未显式指定 tab，则按反馈参数落到对应页签
     const tabFromQuery = c.req.query('tab')
     const inferredTab =
       tabFromQuery
@@ -74,8 +73,9 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       listInviteCodes(c.env.DB),
       listOAuthProviders(c.env.DB)
     ])
-    return c.html(
-      <Layout title="管理后台">
+    const csrf = getRequestCsrf(c)
+    const html = c.html(
+      <Layout title="????">
         <AdminView
           users={users}
           records={records}
@@ -86,6 +86,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
           currentUserId={user.id}
           currentUserSuperAdmin={isSuperAdminUser(user)}
           activeTab={activeTab}
+          csrfToken={csrf.token}
           createError={c.req.query('create_error') ?? undefined}
           inviteError={c.req.query('invite_error') ?? undefined}
           inviteInfo={c.req.query('invite_info') ?? undefined}
@@ -94,12 +95,15 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
         />
       </Layout>
     )
+    return withCsrfCookie(await html, csrf.setCookie)
   })
 
   app.post('/admin/settings', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const current = await getSettings(c.env.DB)
 
     const mode = String(form.get('registration_mode') ?? 'email')
@@ -108,7 +112,6 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     const whitelistSuffixesRaw = String(form.get('email_whitelist_suffixes') ?? '').trim()
     const blacklistSuffixesRaw = String(form.get('email_blacklist_suffixes') ?? '').trim()
-
     const resendApiKeyFromForm = String(form.get('resend_api_key') ?? '').trim()
     const patch: Partial<Settings> = {
       registration_enabled: form.get('registration_enabled') === 'on',
@@ -124,7 +127,6 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       max_records_per_user: Math.max(0, Number(form.get('max_records_per_user') ?? 0) || 0),
       min_subdomain_length: Math.max(0, Number(form.get('min_subdomain_length') ?? 0) || 0)
     }
-    // API Key 留空则保留既有
     if (resendApiKeyFromForm) {
       patch.resend_api_key = resendApiKeyFromForm
     } else if (!current.resend_api_key) {
@@ -138,13 +140,14 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/admin/users/:id/role', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     if (!isSuperAdminUser(admin)) return c.redirect(adminPath('users'))
     const id = c.req.param('id')
     if (id === admin.id) return c.redirect(adminPath('users'))
-    // 超级管理员不能被其他管理员降级
     const targetSuper = await isSuperAdmin(c.env.DB, id)
     if (targetSuper) return c.redirect(adminPath('users'))
-    const form = await c.req.formData()
     const roleFromForm = String(form.get('role') ?? '')
     if (roleFromForm === 'admin' || roleFromForm === 'user') {
       await setUserRole(c.env.DB, id, roleFromForm)
@@ -155,15 +158,16 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/admin/users/:id/delete', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     if (id === admin.id) return c.redirect(adminPath('users'))
     const target = await findUserById(c.env.DB, id)
     if (!target) return c.redirect(adminPath('users'))
     if (target.role === 'admin' && !isSuperAdminUser(admin)) return c.redirect(adminPath('users'))
-    // 禁止删除超级管理员
     const targetSuper = await isSuperAdmin(c.env.DB, id)
     if (targetSuper) return c.redirect(adminPath('users'))
-    // 同时级联删除其 DNS 记录 + Cloudflare 中对应记录
     const records = await listRecordsByUser(c.env.DB, id)
     for (const r of records) {
       await deleteRecordAndCloudflare(c.env, r)
@@ -175,10 +179,12 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/admin/users/:id/limit', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     const target = await findUserById(c.env.DB, id)
     if (!target || hasUnlimitedDnsLimits(target)) return c.redirect(adminPath('users'))
-    const form = await c.req.formData()
     const raw = String(form.get('record_limit') ?? '').trim()
     let limit: number | null = null
     if (raw !== '') {
@@ -193,18 +199,19 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     return c.redirect(adminPath('users'))
   })
 
-  // 管理员手动创建用户（无需走注册流程）
   app.post('/admin/users/create', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const name = String(form.get('name') ?? '').trim()
     const email = String(form.get('email') ?? '').trim()
     const password = String(form.get('password') ?? '')
     const role = isSuperAdminUser(admin) && String(form.get('role') ?? 'user') === 'admin' ? 'admin' : 'user'
 
     if (!name || !email || password.length < 8) {
-      return c.redirect(adminPath('users', { create_error: '参数不完整或密码少于8位' }))
+      return c.redirect(adminPath('users', { create_error: '??????????8?' }))
     }
 
     const auth = await createAuth(c.env)
@@ -216,7 +223,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       })
       if (!signUpRes.ok) {
         const data = await signUpRes.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || '创建用户失败'
+        const msg = (data as { message?: string }).message || '??????'
         return c.redirect(adminPath('users', { create_error: msg }))
       }
       const listRes = await listAllUsers(c.env.DB)
@@ -225,7 +232,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
         await setUserRole(c.env.DB, newUser.id, 'admin')
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '创建用户失败'
+      const msg = err instanceof Error ? err.message : '??????'
       return c.redirect(adminPath('users', { create_error: msg }))
     }
     return c.redirect(adminPath('users'))
@@ -234,6 +241,9 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/admin/dns/:id/delete', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     const record = await findRecordById(c.env.DB, id)
     if (record) {
@@ -242,20 +252,21 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     return c.redirect(adminPath('dns'))
   })
 
-
   app.post('/admin/invites/create', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
-  // 仅管理员/超级管理员可生成(requireAdmin 已校验 role=admin)
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const settings = await getSettings(c.env.DB)
     if (!settings.invite_required) {
-      return c.redirect(adminPath('invites', { invite_error: '请先开启邀请码注册' }))
+      return c.redirect(adminPath('invites', { invite_error: '?????????' }))
     }
     try {
       const created = await createInviteCode(c.env.DB, admin.id)
-      return c.redirect(adminPath('invites', { invite_info: `已生成邀请码 ${created.code}` }))
+      return c.redirect(adminPath('invites', { invite_info: `?????? ${created.code}` }))
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '生成邀请码失败'
+      const msg = err instanceof Error ? err.message : '???????'
       return c.redirect(adminPath('invites', { invite_error: msg }))
     }
   })
@@ -263,19 +274,23 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/admin/invites/:id/revoke', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     const result = await revokeInviteCode(c.env.DB, id)
     if (!result.ok) {
       return c.redirect(adminPath('invites', { invite_error: result.message }))
     }
-    return c.redirect(adminPath('invites', { invite_info: '邀请码已作废' }))
+    return c.redirect(adminPath('invites', { invite_info: '??????' }))
   })
-
 
   app.post('/admin/oauth/create', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const result = await createOAuthProvider(c.env.DB, {
       provider_id: String(form.get('provider_id') ?? ''),
       name: String(form.get('name') ?? ''),
@@ -294,14 +309,16 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!result.ok) {
       return c.redirect(adminPath('oauth', { oauth_error: result.message }))
     }
-    return c.redirect(adminPath('oauth', { oauth_info: `已添加 OAuth 应用 ${result.provider.name}` }))
+    return c.redirect(adminPath('oauth', { oauth_info: `??? OAuth ?? ${result.provider.name}` }))
   })
 
   app.post('/admin/oauth/:id/update', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
-    const id = c.req.param('id')
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
+    const id = c.req.param('id')
     const result = await updateOAuthProvider(c.env.DB, id, {
       provider_id: String(form.get('provider_id') ?? ''),
       name: String(form.get('name') ?? ''),
@@ -320,24 +337,29 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!result.ok) {
       return c.redirect(adminPath('oauth', { oauth_error: result.message }))
     }
-    return c.redirect(adminPath('oauth', { oauth_info: 'OAuth 应用已更新' }))
+    return c.redirect(adminPath('oauth', { oauth_info: 'OAuth ?????' }))
   })
 
   app.post('/admin/oauth/:id/toggle', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
-    const id = c.req.param('id')
     const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
+    const id = c.req.param('id')
     const enabled = form.get('enabled') === '1'
     await setOAuthProviderEnabled(c.env.DB, id, enabled)
-    return c.redirect(adminPath('oauth', { oauth_info: enabled ? '已启用' : '已禁用' }))
+    return c.redirect(adminPath('oauth', { oauth_info: enabled ? '???' : '???' }))
   })
 
   app.post('/admin/oauth/:id/delete', async (c) => {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return c.redirect('/')
+    const form = await c.req.formData()
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     await deleteOAuthProvider(c.env.DB, id)
-    return c.redirect(adminPath('oauth', { oauth_info: 'OAuth 应用已删除' }))
+    return c.redirect(adminPath('oauth', { oauth_info: 'OAuth ?????' }))
   })
 }

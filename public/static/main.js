@@ -1,3 +1,27 @@
+
+function readCookie(name) {
+  const parts = document.cookie.split(';');
+  for (const part of parts) {
+    const [k, ...rest] = part.trim().split('=');
+    if (k === name) {
+      try {
+        return decodeURIComponent(rest.join('=') || '');
+      } catch {
+        return rest.join('=') || '';
+      }
+    }
+  }
+  return '';
+}
+
+function csrfHeaders(extra = {}) {
+  const token = readCookie('csrf_token');
+  return {
+    ...extra,
+    ...(token ? { 'x-csrf-token': token } : {})
+  };
+}
+
 const button = document.getElementById('btn');
 const rootDomainSelect = document.getElementById('root-domain');
 
@@ -191,7 +215,7 @@ async function onRecordsClick(event) {
     const res = await fetch(`/api/dns/${encodeURIComponent(id)}/delete`, {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { Accept: 'application/json' }
+      headers: csrfHeaders({ Accept: 'application/json' })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.success) {
@@ -235,7 +259,7 @@ async function createDnsRecords() {
   try {
     const res = await fetch('/api/create-dns', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
       credentials: 'same-origin',
       body: JSON.stringify({
         subdomain,

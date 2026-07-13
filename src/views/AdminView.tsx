@@ -49,7 +49,14 @@ export const AdminView: FC<{
   inviteInfo?: string
   oauthError?: string
   oauthInfo?: string
-}> = ({ users, records, settings, inviteCodes, oauthProviders, oauthTemplates = [], currentUserId, currentUserSuperAdmin, activeTab = 'settings', createError, inviteError, inviteInfo, oauthError, oauthInfo }) => {
+  csrfToken: string
+}> = ({ users, records, settings, inviteCodes, oauthProviders, oauthTemplates = [], currentUserId, currentUserSuperAdmin, activeTab = 'settings', createError, inviteError, inviteInfo, oauthError, oauthInfo,
+  csrfToken
+}) => {
+  const csrfField = (
+    <input type="hidden" name="csrf_token" value={csrfToken} />
+  )
+
   const tab = activeTab
   const tabClass = (id: AdminTab) =>
     tab === id
@@ -130,6 +137,8 @@ export const AdminView: FC<{
           <h3 class="text-lg font-bold text-white mb-6 pb-3 border-b border-slate-800">全局与注册配置</h3>
 
           <form method="post" action="/admin/settings" class="space-y-6">
+                {csrfField}
+
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
               {/* Left Column: Register settings */}
@@ -362,6 +371,8 @@ export const AdminView: FC<{
               </div>
             )}
             <form method="post" action="/admin/oauth/create" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {csrfField}
+
               <div>
                 <label class="block text-xs font-semibold text-slate-500 mb-1">Provider ID</label>
                 <input name="provider_id" required placeholder="github / linuxdo" class="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-md text-white text-sm focus:outline-none focus:border-emerald-500 font-mono-custom" />
@@ -452,6 +463,8 @@ export const AdminView: FC<{
                     </div>
                     <div class="flex items-center gap-2">
                       <form method="post" action={`/admin/oauth/${p.id}/toggle`}>
+                {csrfField}
+
                         <input type="hidden" name="enabled" value={p.enabled ? '0' : '1'} />
                         <button type="submit" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-md transition">
                           {p.enabled ? '禁用' : '启用'}
@@ -461,6 +474,8 @@ export const AdminView: FC<{
                         编辑
                       </button>
                       <form method="post" action={`/admin/oauth/${p.id}/delete`} onsubmit="return confirm('确认删除该 OAuth 应用？');">
+                {csrfField}
+
                         <button type="submit" class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-md transition">删除</button>
                       </form>
                     </div>
@@ -469,6 +484,8 @@ export const AdminView: FC<{
                   {/* Edit Form Dropdown */}
                   <div id={`edit-oauth-${p.id}`} class="hidden border-t border-slate-800 bg-slate-900/50 p-5">
                     <form method="post" action={`/admin/oauth/${p.id}/update`} class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {csrfField}
+
                       <div>
                         <label class="block text-[10px] font-semibold text-slate-500 mb-1">Provider ID</label>
                         <input name="provider_id" value={p.provider_id} class="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white font-mono-custom" />
@@ -539,6 +556,8 @@ export const AdminView: FC<{
           <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800">
             <h3 class="text-lg font-bold text-white">邀请码管理 ({inviteCodes.length})</h3>
             <form method="post" action="/admin/invites/create">
+                {csrfField}
+
               <button
                 type="submit"
                 disabled={!settings.invite_required}
@@ -612,6 +631,8 @@ export const AdminView: FC<{
                           <td class="py-3 px-4 text-right">
                             {!code.used_by && !code.revoked ? (
                               <form method="post" action={`/admin/invites/${code.id}/revoke`} class="inline">
+                {csrfField}
+
                                 <button type="submit" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-md transition">作废</button>
                               </form>
                             ) : (
@@ -645,6 +666,8 @@ export const AdminView: FC<{
           <div class="mb-8 p-5 bg-slate-950 rounded-lg border border-slate-800">
             <h4 class="text-sm font-bold text-white mb-4">手动创建用户</h4>
             <form method="post" action="/admin/users/create" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                {csrfField}
+
               <div>
                 <label class="block text-xs font-semibold text-slate-500 mb-1">用户名</label>
                 <input type="text" name="name" required class="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-md text-white text-sm focus:outline-none focus:border-emerald-500" placeholder="newuser" />
@@ -725,6 +748,8 @@ export const AdminView: FC<{
                           <span class="text-amber-400">∞</span>
                         ) : (
                           <form method="post" action={`/admin/users/${u.id}/limit`} class="flex items-center gap-1">
+                {csrfField}
+
                             <input
                               type="number"
                               name="record_limit"
@@ -745,6 +770,8 @@ export const AdminView: FC<{
                           <div class="flex justify-end gap-1.5">
                             {currentUserSuperAdmin && (u.role !== 'admin' ? (
                               <form method="post" action={`/admin/users/${u.id}/role`} class="inline">
+                {csrfField}
+
                                 <input type="hidden" name="role" value="admin" />
                                 <button type="submit" class="px-2 py-1 text-[11px] bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-900/30 rounded transition active:scale-[0.98]">
                                   设管理员
@@ -752,6 +779,8 @@ export const AdminView: FC<{
                               </form>
                             ) : (
                               <form method="post" action={`/admin/users/${u.id}/role`} class="inline">
+                {csrfField}
+
                                 <input type="hidden" name="role" value="user" />
                                 <button type="submit" class="px-2 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded transition active:scale-[0.98]">
                                   降级
@@ -759,6 +788,8 @@ export const AdminView: FC<{
                               </form>
                             ))}
                             <form method="post" action={`/admin/users/${u.id}/delete`} class="inline" onsubmit="return confirm('确认删除该用户？将级联删除其所有 DNS 记录和关联会话！');">
+                {csrfField}
+
                               <button type="submit" class="px-2 py-1 text-[11px] bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded transition active:scale-[0.98]">
                                 删除
                               </button>
@@ -811,6 +842,8 @@ export const AdminView: FC<{
                       <td class="py-3 px-4 text-slate-400 text-[11px]">{new Date(r.created_at).toLocaleString('zh-CN')}</td>
                       <td class="py-3 px-4 text-right">
                         <form method="post" action={`/admin/dns/${r.id}/delete`} class="inline" onsubmit="return confirm('确认删除？此操作将永久抹除 Cloudflare 中的解析数据！');">
+                {csrfField}
+
                           <button type="submit" class="px-2.5 py-1 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-md transition active:scale-[0.98]">
                             强制删除
                           </button>

@@ -15,6 +15,7 @@ export const SettingsView: FC<{
   oauthInfo?: string
   passkeyError?: string
   passkeyInfo?: string
+  csrfToken: string
 }> = ({
   name,
   email,
@@ -27,8 +28,13 @@ export const SettingsView: FC<{
   oauthError,
   oauthInfo,
   passkeyError,
-  passkeyInfo
+  passkeyInfo,
+  csrfToken
 }) => {
+  const csrfField = (
+    <input type="hidden" name="csrf_token" value={csrfToken} />
+  )
+
   const linkedProviderIds = new Set(linkedAccounts.map((a) => a.providerId))
   const bindableProviders = availableProviders.filter((p) => !linkedProviderIds.has(p.provider_id))
   const providerName = (providerId: string) =>
@@ -107,6 +113,8 @@ export const SettingsView: FC<{
                 <div class="mb-4 p-3 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400">{profileInfo}</div>
               )}
               <form method="post" action="/settings/profile" class="space-y-4 max-w-xl">
+                {csrfField}
+
                 <div>
                   <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">用户名</label>
                   <input
@@ -173,6 +181,8 @@ export const SettingsView: FC<{
                           </div>
                         </div>
                         <form method="post" action="/settings/oauth/unlink" class="shrink-0">
+                {csrfField}
+
                           <input type="hidden" name="provider_id" value={account.providerId} />
                           <input type="hidden" name="account_id" value={account.accountId} />
                           <button type="submit" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-md transition">
@@ -195,6 +205,8 @@ export const SettingsView: FC<{
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {bindableProviders.map((provider) => (
                       <form method="post" action="/settings/oauth/link" class="flex items-center justify-between gap-3 p-3 rounded-md bg-slate-950 border border-slate-800 hover:border-emerald-500/50 transition">
+                {csrfField}
+
                         <div class="flex items-center gap-3 min-w-0">
                           {provider.icon_url ? (
                             <img src={provider.icon_url} alt="" class="w-8 h-8 rounded-full bg-transparent object-cover" />
@@ -262,6 +274,8 @@ export const SettingsView: FC<{
                         </div>
                       </div>
                       <form method="post" action="/settings/passkey/delete" class="shrink-0" onsubmit="return confirm('确认删除该 Passkey？');">
+                {csrfField}
+
                         <input type="hidden" name="id" value={item.id} />
                         <button type="submit" class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-md transition">
                           删除

@@ -106,3 +106,52 @@ export async function deleteEmailVerificationsByEmail(db: D1Database, email: str
 export async function purgeExpiredEmailVerifications(db: D1Database, now = Date.now()): Promise<void> {
   await db.prepare('DELETE FROM email_verification WHERE expires_at < ?').bind(now).run()
 }
+
+
+const VERIFY_FAIL_WINDOW_MS = 10 * 60 * 1000
+const VERIFY_FAIL_MAX = 8
+const verifyFailBuckets = new Map<string, { count: number; resetAt: number }>()
+
+function verifyFailKey(email: string, ip: string | null | undefined): string {
+  return `${email.toLowerCase()}|${ip || 'unknown'}`
+}
+
+export function clearVerificationFailures(email: string, ip?: string | null): void {
+  verifyFailBuckets.delete(verifyFailKey(email, ip))
+}
+
+export function recordVerificationFailure(
+  email: string,
+  ip?: string | null
+): { limited: boolean; remaining: number; retryAfterSec: number } {
+  const key = verifyFailKey(email, ip)
+  const now = Date.now()
+  const current = verifyFailBuckets.get(key)
+  if (!current || now >= current.resetAt) {
+    verifyFailBuckets.set(key, { count: 1, resetAt: now + VERIFY_FAIL_WINDOW_MS })
+    return { limited: false, remaining: VERIFY_FAIL_MAX - 1, retryAfterSec: Math.ceil(VERIFY_FAIL_WINDOW_MS / 1000) }
+  }
+  current.count += 1
+  verifyFailBuckets.set(key, current)
+  const remaining = Math.max(0, VERIFY_FAIL_MAX - current.count)
+  return {
+    limited: current.count >= VERIFY_FAIL_MAX,
+    remaining,
+    retryAfterSec: Math.max(1, Math.ceil((current.resetAt - now) / 1000))
+  }
+}
+
+export function isVerificationRateLimited(
+  email: string,
+  ip?: string | null
+): { limited: boolean; retryAfterSec: number } {
+  const key = verifyFailKey(email, ip)
+  const now = Date.now()
+  const current = verifyFailBuckets.get(key)
+  if (!current || now >= current.resetAt) return { limited: false, retryAfterSec: 0 }
+  if (current.count < VERIFY_FAIL_MAX) return { limited: false, retryAfterSec: 0 }
+  return {
+    limited: true,
+    retryAfterSec: Math.max(1, Math.ceil((current.resetAt - now) / 1000))
+  }
+}

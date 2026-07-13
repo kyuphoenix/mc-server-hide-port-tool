@@ -6,6 +6,7 @@ import {
   toGenericOAuthConfig,
   type OAuthProviderRow
 } from './services/oauth-providers'
+import { getSettings } from './services/settings'
 import { allocateNextUserId } from './services/user-ids'
 
 export type AuthBindings = {
@@ -16,6 +17,25 @@ export type AuthBindings = {
 }
 
 export type Auth = ReturnType<typeof betterAuth>
+
+async function resolveOAuthSignupPolicy(db: D1Database): Promise<{
+  disableSignUp: boolean
+  disableImplicitSignUp: boolean
+}> {
+  const settings = await getSettings(db)
+  // OAuth new-account creation is only allowed when open registration is enabled
+  // and mode is oauth/both. Invite requirement is enforced in app routes for new users.
+  const oauthSignupAllowed =
+    settings.registration_enabled &&
+    (settings.registration_mode === 'oauth' || settings.registration_mode === 'both')
+  return {
+    disableSignUp: !oauthSignupAllowed,
+    // Always require explicit requestSignUp for new OAuth accounts when allowed;
+    // login path must not implicitly create users.
+    disableImplicitSignUp: true
+  }
+}
+
 
 function resolvePasskeyRp(env: AuthBindings): { rpID: string; rpName: string; origin?: string } {
   const appName = env.APP_NAME || 'hide-port-tool'
@@ -42,7 +62,18 @@ export async function createAuth(
   const providers =
     oauthProviders ?? (await listEnabledOAuthProviders(env.DB).catch(() => [] as OAuthProviderRow[]))
 
-  const genericConfigs = providers.map((p) => toGenericOAuthConfig(p, env.DB))
+  // Public email signup is blocked at the /api/auth/* edge; app routes call signUpEmail server-side.
+  const oauthSignupPolicy = await resolveOAuthSignupPolicy(env.DB).catch(() => ({
+    // Fail closed if settings cannot be loaded.
+    disableSignUp: true,
+    disableImplicitSignUp: true
+  }))
+  const genericConfigs = providers.map((p) =>
+    toGenericOAuthConfig(p, env.DB, {
+      disableSignUp: oauthSignupPolicy.disableSignUp,
+      disableImplicitSignUp: oauthSignupPolicy.disableImplicitSignUp
+    })
+  )
   const passkeyRp = resolvePasskeyRp(env)
 
   const plugins = [

@@ -24,10 +24,13 @@ import {
 } from '../services/dns-records'
 import { listPublicOAuthProviders } from '../services/oauth-providers'
 import {
+  clearVerificationFailures,
   deleteEmailVerificationsByEmail,
   findLatestEmailVerification,
+  isVerificationRateLimited,
   openPendingPassword,
   purgeExpiredEmailVerifications,
+  recordVerificationFailure,
   sealPendingPassword,
   upsertEmailVerification,
   verifyVerificationCode
@@ -43,11 +46,26 @@ import {
 import { type Bindings } from '../services/cloudflare-dns'
 import { parseCookie, redirectFromOAuthResponse, redirectWithHeaders } from '../lib/http'
 import { finalizeInviteUsage, findUserIdByEmail, requireInviteCodeIfNeeded } from '../lib/invite'
+import { safeInternalPath } from '../lib/security'
+import { getRequestCsrf, withCsrfCookie } from '../lib/csrf'
 
 export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.all('/api/auth/*', async (c) => {
     const auth = await createAuth(c.env)
     const pathname = new URL(c.req.url).pathname
+    const method = c.req.method.toUpperCase()
+
+    // Block public better-auth email signup; app-owned /register handles policy checks.
+    if (method === 'POST' && (pathname.endsWith('/sign-up/email') || pathname.includes('/sign-up/email'))) {
+      return c.json(
+        {
+          code: 'SIGN_UP_DISABLED',
+          message: '?????????????'
+        },
+        403
+      )
+    }
+
     const isGitHubOAuthCallback =
       pathname.endsWith('/oauth2/callback/github') ||
       pathname.includes('/oauth2/callback/github')
@@ -189,19 +207,21 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
       return c.redirect('/login')
     }
     const records = await listRecordsByUser(c.env.DB, user.id)
-    return c.html(
+    const csrf = getRequestCsrf(c)
+    const html = c.html(
       <Layout title="Minecraft 端口隐藏工具">
         <IndexView email={user.email} role={user.role ?? 'user'} records={records} />
       </Layout>
     )
+    return withCsrfCookie(await html, csrf.setCookie)
   })
 
   // ---------- 登录 ----------
   app.get('/login', async (c) => {
-    const next = c.req.query('next')
+    const next = safeInternalPath(c.req.query('next'), '/')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) {
-      return c.redirect(next || '/')
+      return c.redirect(next)
     }
     const oauthProviders = await listPublicOAuthProviders(c.env.DB)
     const error = c.req.query('error') || undefined
@@ -216,7 +236,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/login', async (c) => {
     const auth = await createAuth(c.env)
     const form = await c.req.formData()
-    const next = c.req.query('next') || '/'
+    const next = safeInternalPath(c.req.query('next'), '/')
     const email = String(form.get('email') ?? '').trim()
     const password = String(form.get('password') ?? '')
     try {
@@ -378,11 +398,28 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const form = await c.req.formData()
     const email = String(form.get('email') ?? '').trim()
     const code = String(form.get('code') ?? '').trim()
+    const clientIp =
+      c.req.header('cf-connecting-ip') ||
+      c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
+      null
 
     if (!email || !code) {
       return c.html(
-        <Layout title="邮箱验证"><VerifyEmailView email={email} error="参数缺失" /></Layout>,
+        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
         { status: 400 }
+      )
+    }
+
+    const limited = isVerificationRateLimited(email, clientIp)
+    if (limited.limited) {
+      return c.html(
+        <Layout title="????">
+          <VerifyEmailView
+            email={email}
+            error={`?????????? ${limited.retryAfterSec} ????`}
+          />
+        </Layout>,
+        { status: 429 }
       )
     }
 
@@ -390,21 +427,25 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     if (!row) {
       return c.html(
-        <Layout title="邮箱验证"><VerifyEmailView email={email} error="未找到验证记录，请重新注册" /></Layout>,
+        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
         { status: 400 }
       )
     }
     if (Date.now() > row.expires_at) {
       return c.html(
-        <Layout title="邮箱验证"><VerifyEmailView email={email} error="验证码已过期，请重新注册" /></Layout>,
+        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
         { status: 400 }
       )
     }
     const codeOk = await verifyVerificationCode(code, row.code_hash)
     if (!codeOk) {
+      const fail = recordVerificationFailure(email, clientIp)
+      const msg = fail.limited
+        ? `??????????? ${fail.retryAfterSec} ????`
+        : '?????'
       return c.html(
-        <Layout title="邮箱验证"><VerifyEmailView email={email} error="验证码错误" /></Layout>,
-        { status: 400 }
+        <Layout title="????"><VerifyEmailView email={email} error={msg} /></Layout>,
+        { status: fail.limited ? 429 : 400 }
       )
     }
 
@@ -413,7 +454,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
       plainPassword = await openPendingPassword(c.env.BETTER_AUTH_SECRET, row.password)
     } catch {
       return c.html(
-        <Layout title="邮箱验证"><VerifyEmailView email={email} error="验证记录无效，请重新注册" /></Layout>,
+        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
         { status: 400 }
       )
     }
@@ -426,27 +467,38 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (res.ok) {
+        const newUserId = await findUserIdByEmail(c.env.DB, email)
+        const used = await finalizeInviteUsage(c.env.DB, row.invite_code, newUserId)
+        if (!used.ok && newUserId) {
+          await deleteUserCascade(c.env.DB, newUserId)
+          return c.html(
+            <Layout title="??"><RegisterView settings={settings} error={used.message} /></Layout>,
+            { status: 400 }
+          )
+        }
         await deleteEmailVerificationsByEmail(c.env.DB, email)
+        clearVerificationFailures(email, clientIp)
         return redirectWithHeaders('/login?registered=1', 302, res.headers)
       }
       const data = await res.json().catch(() => ({}))
       const message =
         (data as { message?: string }).message ||
-        (res.status === 422 ? '该邮箱已被注册' : '注册失败')
+        (res.status === 422 ? '???????' : '????')
       return c.html(
-        <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
+        <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
         { status: res.status as 400 | 401 | 422 }
       )
     } catch (err) {
-      const message = err instanceof Error ? err.message : '注册失败'
+      const message = err instanceof Error ? err.message : '????'
       return c.html(
-        <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
+        <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
         { status: 500 }
       )
     }
   })
 
-  app.on(['GET', 'POST'], '/logout', async (c) => {
+  app.on(['GET', 'POST'], '/logout'
+, async (c) => {
     const auth = await createAuth(c.env)
     try {
       const res = await auth.api.signOut({ headers: c.req.raw.headers, asResponse: true })
@@ -458,7 +510,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
 
   app.post('/login/oauth', async (c) => {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
-    const next = c.req.query('next') || '/'
+    const next = safeInternalPath(c.req.query('next'), '/')
     if (user) return c.redirect(next)
     const form = await c.req.formData()
     const providerId = String(form.get('provider_id') ?? '').trim()
@@ -467,7 +519,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
     const auth = await createAuth(c.env)
     try {
-      // genericOAuth endpoint returns JSON { url, redirect }; convert to HTTP redirect
+      // Login must not create accounts: disableImplicitSignUp is enforced in provider config.\n      // requestSignUp is intentionally omitted here.
       const res = await (auth.api as any).signInWithOAuth2({
         body: {
           providerId,
@@ -522,7 +574,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         body: {
           providerId,
           callbackURL: '/register/oauth/done',
-          errorCallbackURL: '/register?error=' + encodeURIComponent('OAuth 登录失败')
+          errorCallbackURL: '/register?error=' + encodeURIComponent('OAuth ????'),
+          // Explicit signup; provider still blocks when registration is disabled/email-only.
+          requestSignUp: true
         },
         headers: c.req.raw.headers,
         asResponse: true
@@ -593,6 +647,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     const createdAtMs = new Date(user.createdAt).getTime()
     const isNewUser = Number.isFinite(createdAtMs) && Date.now() - createdAtMs < 5 * 60 * 1000
+
+    if (isNewUser) {
+      const oauthSignupAllowed =
+        settings.registration_enabled &&
+        (settings.registration_mode === 'oauth' || settings.registration_mode === 'both')
+      if (!oauthSignupAllowed) {
+        return await failOAuthRegister('??????? OAuth ?????', 403)
+      }
+    }
 
     // Defense-in-depth: if a brand-new GitHub user somehow got created, re-check age and roll back.
     if (isNewUser && settings.github_min_account_age_days > 0) {

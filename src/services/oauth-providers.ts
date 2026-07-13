@@ -417,7 +417,11 @@ export async function setOAuthProviderEnabled(
   invalidateOAuthProviderCache(db)
 }
 
-export function toGenericOAuthConfig(row: OAuthProviderRow, db: D1Database) {
+export function toGenericOAuthConfig(
+  row: OAuthProviderRow,
+  db: D1Database,
+  policy?: { disableSignUp?: boolean; disableImplicitSignUp?: boolean }
+) {
   const base = {
     providerId: row.provider_id,
     clientId: row.client_id,
@@ -427,7 +431,10 @@ export function toGenericOAuthConfig(row: OAuthProviderRow, db: D1Database) {
     tokenUrl: row.token_url || undefined,
     userInfoUrl: row.user_info_url || undefined,
     scopes: parseScopes(row.scopes),
-    pkce: !!row.pkce
+    pkce: !!row.pkce,
+    disableSignUp: policy?.disableSignUp === true,
+    // Default true: login must not create accounts unless requestSignUp is set.
+    disableImplicitSignUp: policy?.disableImplicitSignUp !== false
   }
 
   if (row.provider_id === 'github') {
