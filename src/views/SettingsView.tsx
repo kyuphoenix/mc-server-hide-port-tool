@@ -61,7 +61,10 @@ export const SettingsView: FC<{
                 管理后台
               </a>
             )}
-            <a href="/logout" class="text-rose-400 hover:text-rose-300 transition font-medium">退出登录</a>
+            <form method="post" action="/logout" class="inline">
+                <input type="hidden" name="csrf_token" value={csrfToken} />
+                <button type="submit" class="text-rose-400 hover:text-rose-300 transition font-medium">退出登录</button>
+              </form>
           </div>
         </div>
       </header>

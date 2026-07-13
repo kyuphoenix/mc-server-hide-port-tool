@@ -4,6 +4,25 @@ export function redirectWithHeaders(location: string, status: 302 | 303 = 302, h
   return new Response(null, { status, headers: responseHeaders })
 }
 
+/** Drop Set-Cookie so a nested better-auth response cannot replace the current session. */
+export function withoutSetCookieHeaders(headers?: Headers | null): Headers {
+  const next = new Headers()
+  if (!headers) return next
+  for (const [key, value] of headers.entries()) {
+    if (key.toLowerCase() === 'set-cookie') continue
+    next.append(key, value)
+  }
+  return next
+}
+
+export function redirectWithoutSessionCookies(
+  location: string,
+  status: 302 | 303 = 302,
+  headers?: Headers
+): Response {
+  return redirectWithHeaders(location, status, withoutSetCookieHeaders(headers))
+}
+
 export async function redirectFromOAuthResponse(
   res: Response,
   fallbackErrorPath: string

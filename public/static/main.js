@@ -54,14 +54,14 @@ button.addEventListener('click', submitDnsForm);
 
 async function loadDomains() {
   setButtonEnabled(false);
-  rootDomainSelect.innerHTML = '<option value="">???...</option>';
+  rootDomainSelect.innerHTML = '<option value="">加载中...</option>';
 
   try {
     const res = await fetch('/api/domains');
     const data = await res.json();
 
     if (!res.ok || !data.success || !Array.isArray(data.domains) || data.domains.length === 0) {
-      throw new Error(data.message || '???????????');
+      throw new Error(data.message || '后端没有返回可用根域名');
     }
 
     rootDomainSelect.innerHTML = '';
@@ -86,8 +86,11 @@ async function loadDomains() {
 
     setButtonEnabled(true);
   } catch (error) {
-    rootDomainSelect.innerHTML = '<option value="">??????</option>';
-    showToast(error instanceof Error ? error.message : '?????????? Worker ??', 'error');
+    rootDomainSelect.innerHTML = '<option value="">域名加载失败</option>';
+    showToast(
+      error instanceof Error ? error.message : '域名加载失败，请检查 Worker 配置',
+      'error'
+    );
   }
 }
 
@@ -112,7 +115,7 @@ function setRecordCount(count) {
   const countEl = document.getElementById('record-count');
   if (countEl) countEl.textContent = String(n);
   const titleEl = document.getElementById('records-title');
-  if (titleEl) titleEl.textContent = `???? (${n})`;
+  if (titleEl) titleEl.textContent = `我的记录 (${n})`;
   refreshHint();
   ensureEmptyState();
 }
@@ -120,14 +123,14 @@ function setRecordCount(count) {
 function refreshHint() {
   const info = [];
   if (domainMeta.minSubdomainLength > 0) {
-    info.push(`????? ${domainMeta.minSubdomainLength} ???`);
+    info.push(`子域名至少 ${domainMeta.minSubdomainLength} 个字符`);
   }
   if (domainMeta.recordLimit !== null && domainMeta.recordLimit !== undefined && domainMeta.recordLimit > 0) {
-    info.push(`???? ${getRecordCount()}/${domainMeta.recordLimit}`);
+    info.push(`记录上限 ${getRecordCount()}/${domainMeta.recordLimit}`);
   } else if (domainMeta.recordLimit === 0) {
-    info.push('??????');
+    info.push('记录数无上限');
   }
-  setHint(info.join('  ?  '));
+  setHint(info.join('  ·  '));
 }
 
 function formatDate(ts) {
@@ -153,7 +156,7 @@ function ensureEmptyState() {
             <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
             </svg>
-            <span>???????????????</span>
+            <span>暂无记录，快去左侧创建一条吧！</span>
           </div>
         </td>`;
       tbody.appendChild(tr);
@@ -168,7 +171,7 @@ function createRecordRow(record) {
   tr.className = 'hover:bg-slate-900/40 transition';
   tr.setAttribute('data-record-id', record.id);
   tr.innerHTML = `
-    <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="????????">${escapeHtml(record.host_name)}</td>
+    <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="点击即可选择复制">${escapeHtml(record.host_name)}</td>
     <td class="py-4 px-4 font-mono-custom text-slate-300 break-all">${escapeHtml(record.server_address)}</td>
     <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(String(record.port))}</td>
     <td class="py-4 px-4 text-slate-400 text-xs">${escapeHtml(formatDate(record.created_at))}</td>
@@ -184,14 +187,14 @@ function createRecordRow(record) {
           data-port="${escapeAttr(String(record.port))}"
           class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition active:scale-[0.98]"
         >
-          ??
+          修改
         </button>
         <button
           type="button"
           data-delete-id="${escapeAttr(record.id)}"
           class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition active:scale-[0.98]"
         >
-          ??
+          删除
         </button>
       </div>
     </td>`;
@@ -214,7 +217,7 @@ function escapeAttr(value) {
 function prependRecord(record) {
   const tbody = document.getElementById('records-tbody');
   if (!tbody || !record?.id) return;
-  const empty = tbody.querySelector('tr[data-empty-row]');
+  const empty = tbody.querySelector(`tr[data-record-id="${CSS.escape(record.id)}"]`);
   if (empty) empty.remove();
   const existing = tbody.querySelector(`tr[data-record-id="${CSS.escape(record.id)}"]`);
   if (existing) existing.remove();
@@ -268,7 +271,7 @@ function setEditMode(record) {
   if (editingIdInput) editingIdInput.value = record.id;
   if (editingBanner) editingBanner.classList.remove('hidden');
   if (cancelEditBtn) cancelEditBtn.classList.remove('hidden');
-  if (formTitle) formTitle.textContent = '?? DNS ??';
+  if (formTitle) formTitle.textContent = '修改 DNS 记录';
   if (subdomainInput) {
     subdomainInput.value = record.subdomain || '';
     subdomainInput.disabled = true;
@@ -281,7 +284,7 @@ function setEditMode(record) {
   }
   if (serverAddressInput) serverAddressInput.value = record.server_address || '';
   if (portInput) portInput.value = String(record.port || '');
-  if (button) button.textContent = '????';
+  if (button) button.textContent = '保存修改';
   setButtonEnabled(true);
   if (serverAddressInput) serverAddressInput.focus();
 }
@@ -291,7 +294,7 @@ function clearEditMode() {
   if (editingIdInput) editingIdInput.value = '';
   if (editingBanner) editingBanner.classList.add('hidden');
   if (cancelEditBtn) cancelEditBtn.classList.add('hidden');
-  if (formTitle) formTitle.textContent = '??????';
+  if (formTitle) formTitle.textContent = '一键隐藏端口';
   if (subdomainInput) {
     subdomainInput.disabled = false;
     subdomainInput.classList.remove('opacity-60', 'cursor-not-allowed');
@@ -300,7 +303,7 @@ function clearEditMode() {
     rootDomainSelect.disabled = false;
     rootDomainSelect.classList.remove('opacity-60', 'cursor-not-allowed');
   }
-  if (button) button.textContent = '????';
+  if (button) button.textContent = '一键生成';
   setButtonEnabled(Boolean(rootDomainSelect && rootDomainSelect.value));
 }
 
@@ -325,11 +328,11 @@ async function onRecordsClick(event) {
   if (!btn) return;
   const id = btn.getAttribute('data-delete-id');
   if (!id) return;
-  if (!confirm('??????????? Cloudflare DNS ??????')) return;
+  if (!confirm('确认删除？此操作也将从 Cloudflare DNS 中移除该解析')) return;
 
   btn.setAttribute('disabled', 'true');
   const oldText = btn.textContent;
-  btn.textContent = '???...';
+  btn.textContent = '删除中...';
   try {
     const res = await fetch(`/api/dns/${encodeURIComponent(id)}/delete`, {
       method: 'POST',
@@ -338,7 +341,7 @@ async function onRecordsClick(event) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.success) {
-      throw new Error(data.message || '????');
+      throw new Error(data.message || '删除失败');
     }
     removeRecord(id);
     if (editingId === id) {
@@ -358,12 +361,12 @@ async function onRecordsClick(event) {
           : Number(data.record_limit);
       refreshHint();
     }
-    showToast(data.message || '?????', 'success');
+    showToast(data.message || '记录已删除', 'success');
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '????', 'error');
+    showToast(error instanceof Error ? error.message : '删除失败', 'error');
   } finally {
     btn.removeAttribute('disabled');
-    btn.textContent = oldText || '??';
+    btn.textContent = oldText || '删除';
   }
 }
 
@@ -382,12 +385,12 @@ async function createDnsRecords() {
   const port = portInput.value.trim();
 
   if (!subdomain || !rootDomain || !serverAddress || !port) {
-    showToast('????????', 'error');
+    showToast('请完整填写信息！', 'error');
     return;
   }
 
   setButtonEnabled(false);
-  button.textContent = '???...';
+  button.textContent = '创建中...';
 
   try {
     const res = await fetch('/api/create-dns', {
@@ -404,7 +407,7 @@ async function createDnsRecords() {
 
     const data = await res.json();
     if (!res.ok || !data.success) {
-      showToast(data.message || 'DNS ??????', 'error');
+      showToast(data.message || 'DNS 记录创建失败', 'error');
       return;
     }
 
@@ -425,11 +428,11 @@ async function createDnsRecords() {
     }
 
     subdomainInput.value = '';
-    showToast(data.message || 'DNS ??????', 'success');
+    showToast(data.message || 'DNS 记录创建成功', 'success');
   } catch (error) {
-    showToast('?????????? Worker ??', 'error');
+    showToast('网络请求失败，请检查 Worker 服务', 'error');
   } finally {
-    button.textContent = '????';
+    button.textContent = '一键生成';
     setButtonEnabled(Boolean(rootDomainSelect.value));
   }
 }
@@ -438,12 +441,12 @@ async function updateDnsRecord(id) {
   const serverAddress = serverAddressInput.value.trim();
   const port = portInput.value.trim();
   if (!serverAddress || !port) {
-    showToast('??????????', 'error');
+    showToast('请填写目标地址和端口', 'error');
     return;
   }
 
   setButtonEnabled(false);
-  button.textContent = '???...';
+  button.textContent = '保存中...';
   try {
     const res = await fetch(`/api/dns/${encodeURIComponent(id)}/update`, {
       method: 'POST',
@@ -456,21 +459,21 @@ async function updateDnsRecord(id) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.success) {
-      throw new Error(data.message || '????');
+      throw new Error(data.message || '更新失败');
     }
     if (data.record) {
       updateRecordRow(data.record);
     }
     clearEditMode();
-    showToast(data.message || 'DNS ?????', 'success');
+    showToast(data.message || 'DNS 记录已更新', 'success');
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '????', 'error');
+    showToast(error instanceof Error ? error.message : '更新失败', 'error');
   } finally {
     if (editingId) {
-      button.textContent = '????';
+      button.textContent = '保存修改';
       setButtonEnabled(true);
     } else {
-      button.textContent = '????';
+      button.textContent = '一键生成';
       setButtonEnabled(Boolean(rootDomainSelect.value));
     }
   }

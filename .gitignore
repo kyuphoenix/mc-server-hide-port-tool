@@ -37,3 +37,11 @@ lerna-debug.log*
 !.env.example
 
 .opencode/
+
+# caches / local temp artifacts
+__pycache__/
+*.py[cod]
+*.pyc
+_auth_full.txt
+_tmp_passkey/
+_tmp_*/

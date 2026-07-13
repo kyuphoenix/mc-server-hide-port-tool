@@ -30,6 +30,7 @@ import {
   isVerificationRateLimited,
   openPendingPassword,
   purgeExpiredEmailVerifications,
+  purgeExpiredRateLimitBuckets,
   recordVerificationFailure,
   sealPendingPassword,
   upsertEmailVerification,
@@ -44,10 +45,15 @@ import {
   meetsAgeRequirement
 } from '../services/github'
 import { type Bindings } from '../services/cloudflare-dns'
-import { parseCookie, redirectFromOAuthResponse, redirectWithHeaders } from '../lib/http'
+import {
+  parseCookie,
+  redirectFromOAuthResponse,
+  redirectWithHeaders,
+  redirectWithoutSessionCookies,
+} from '../lib/http'
 import { finalizeInviteUsage, findUserIdByEmail, requireInviteCodeIfNeeded } from '../lib/invite'
-import { safeInternalPath } from '../lib/security'
-import { getRequestCsrf, withCsrfCookie } from '../lib/csrf'
+import { requestIsHttps, safeInternalPath } from '../lib/security'
+import { getRequestCsrf, requireMutationCsrf, withCsrfCookie } from '../lib/csrf'
 
 export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.all('/api/auth/*', async (c) => {
@@ -60,7 +66,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
       return c.json(
         {
           code: 'SIGN_UP_DISABLED',
-          message: '?????????????'
+          message: '请通过网站注册页面完成注册'
         },
         403
       )
@@ -170,12 +176,18 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
           { status: signUpRes.status as 400 | 422 }
         )
       }
-      // 把该用户提升为管理员，并标记为超级管理员（首个创建的用户）
+      // Promote only the earliest user to super admin, so concurrent /setup races
+      // do not create multiple super admins.
       const listRes = await listAllUsers(c.env.DB)
       const newUser = listRes.find((u) => u.email === email)
-      if (newUser) {
+      const firstUser = listRes[0]
+      if (newUser && firstUser && newUser.id === firstUser.id) {
         await setUserRole(c.env.DB, newUser.id, 'admin')
         await setSuperAdmin(c.env.DB, newUser.id, true)
+      } else if (newUser) {
+        // Late racer: keep as normal user; first setup owner remains the only super admin.
+        await setUserRole(c.env.DB, newUser.id, 'user')
+        await setSuperAdmin(c.env.DB, newUser.id, false)
       }
       // 自动登录
       const signInRes = await auth.api.signInEmail({
@@ -210,7 +222,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const csrf = getRequestCsrf(c)
     const html = c.html(
       <Layout title="Minecraft 端口隐藏工具">
-        <IndexView email={user.email} role={user.role ?? 'user'} records={records} />
+        <IndexView email={user.email} role={user.role ?? 'user'} records={records} csrfToken={csrf.token} />
       </Layout>
     )
     return withCsrfCookie(await html, csrf.setCookie)
@@ -372,7 +384,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
             { status: 400 }
           )
         }
-        return redirectWithHeaders('/login?registered=1', 302, res.headers)
+        return redirectWithoutSessionCookies('/login?registered=1', 302, res.headers)
       }
       const data = await res.json().catch(() => ({}))
       const message =
@@ -405,18 +417,19 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     if (!email || !code) {
       return c.html(
-        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error="当前已关闭注册" /></Layout>,
         { status: 400 }
       )
     }
 
-    const limited = isVerificationRateLimited(email, clientIp)
+    await purgeExpiredRateLimitBuckets(c.env.DB)
+    const limited = await isVerificationRateLimited(c.env.DB, email, clientIp)
     if (limited.limited) {
       return c.html(
-        <Layout title="????">
+        <Layout title="邮箱验证">
           <VerifyEmailView
             email={email}
-            error={`?????????? ${limited.retryAfterSec} ????`}
+            error={`尝试过于频繁，请 ${limited.retryAfterSec} 秒后再试`}
           />
         </Layout>,
         { status: 429 }
@@ -427,26 +440,57 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     if (!row) {
       return c.html(
-        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error="验证码不存在或已失效" /></Layout>,
         { status: 400 }
       )
     }
     if (Date.now() > row.expires_at) {
       return c.html(
-        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error="验证码已过期，请重新注册" /></Layout>,
         { status: 400 }
       )
     }
     const codeOk = await verifyVerificationCode(code, row.code_hash)
     if (!codeOk) {
-      const fail = recordVerificationFailure(email, clientIp)
+      const fail = await recordVerificationFailure(c.env.DB, email, clientIp)
       const msg = fail.limited
-        ? `??????????? ${fail.retryAfterSec} ????`
-        : '?????'
+        ? `尝试过于频繁，请 ${fail.retryAfterSec} 秒后再试`
+        : '验证码错误'
       return c.html(
-        <Layout title="????"><VerifyEmailView email={email} error={msg} /></Layout>,
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error={msg} /></Layout>,
         { status: fail.limited ? 429 : 400 }
       )
+    }
+
+    // Re-check registration policy at verification time so a code issued earlier
+    // cannot complete signup after admin disables registration or changes lists.
+    if (!settings.registration_enabled) {
+      return c.html(
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error="当前已关闭注册" /></Layout>,
+        { status: 403 }
+      )
+    }
+    if (settings.registration_mode === 'oauth') {
+      return c.html(
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error="当前仅支持 OAuth 注册" /></Layout>,
+        { status: 403 }
+      )
+    }
+    const emailCheck = isEmailAllowed(email, settings)
+    if (!emailCheck.ok) {
+      return c.html(
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error={emailCheck.reason || '邮箱不被允许'} /></Layout>,
+        { status: 400 }
+      )
+    }
+    if (settings.invite_required) {
+      const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, row.invite_code || '')
+      if (!inviteCheck.ok) {
+        return c.html(
+          <Layout title="邮箱验证"><VerifyEmailView email={email} error={inviteCheck.message} /></Layout>,
+          { status: 400 }
+        )
+      }
     }
 
     let plainPassword: string
@@ -454,7 +498,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
       plainPassword = await openPendingPassword(c.env.BETTER_AUTH_SECRET, row.password)
     } catch {
       return c.html(
-        <Layout title="????"><VerifyEmailView email={email} error="?????????" /></Layout>,
+        <Layout title="邮箱验证"><VerifyEmailView email={email} error="注册信息已失效，请重新注册" /></Layout>,
         { status: 400 }
       )
     }
@@ -472,33 +516,35 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         if (!used.ok && newUserId) {
           await deleteUserCascade(c.env.DB, newUserId)
           return c.html(
-            <Layout title="??"><RegisterView settings={settings} error={used.message} /></Layout>,
+            <Layout title="注册"><RegisterView settings={settings} error={used.message} /></Layout>,
             { status: 400 }
           )
         }
         await deleteEmailVerificationsByEmail(c.env.DB, email)
-        clearVerificationFailures(email, clientIp)
-        return redirectWithHeaders('/login?registered=1', 302, res.headers)
+        await clearVerificationFailures(c.env.DB, email, clientIp)
+        return redirectWithoutSessionCookies('/login?registered=1', 302, res.headers)
       }
       const data = await res.json().catch(() => ({}))
       const message =
         (data as { message?: string }).message ||
-        (res.status === 422 ? '???????' : '????')
+        (res.status === 422 ? '该邮箱已注册' : '注册失败')
       return c.html(
-        <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
+        <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
         { status: res.status as 400 | 401 | 422 }
       )
     } catch (err) {
-      const message = err instanceof Error ? err.message : '????'
+      const message = err instanceof Error ? err.message : '注册失败'
       return c.html(
-        <Layout title="??"><RegisterView settings={settings} error={message} /></Layout>,
+        <Layout title="注册"><RegisterView settings={settings} error={message} /></Layout>,
         { status: 500 }
       )
     }
   })
 
-  app.on(['GET', 'POST'], '/logout'
-, async (c) => {
+  app.post('/logout', async (c) => {
+    const form = await c.req.formData().catch(() => null)
+    const csrfDenied = await requireMutationCsrf(c, form)
+    if (csrfDenied) return csrfDenied
     const auth = await createAuth(c.env)
     try {
       const res = await auth.api.signOut({ headers: c.req.raw.headers, asResponse: true })
@@ -548,7 +594,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
     if (settings.registration_mode === 'email') {
       return c.html(
-        <Layout title="注册"><RegisterView settings={settings} oauthProviders={await listPublicOAuthProviders(c.env.DB)} error="?????????" /></Layout>,
+        <Layout title="注册"><RegisterView settings={settings} oauthProviders={await listPublicOAuthProviders(c.env.DB)} error="当前仅支持邮箱注册" /></Layout>,
         { status: 403 }
       )
     }
@@ -574,7 +620,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         body: {
           providerId,
           callbackURL: '/register/oauth/done',
-          errorCallbackURL: '/register?error=' + encodeURIComponent('OAuth ????'),
+          errorCallbackURL: '/register?error=' + encodeURIComponent('OAuth 注册失败'),
           // Explicit signup; provider still blocks when registration is disabled/email-only.
           requestSignUp: true
         },
@@ -589,7 +635,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         const headers = new Headers(redirected.headers)
         headers.append(
           'Set-Cookie',
-          `pending_invite_code=${encodeURIComponent(inviteCheck.code)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1800`
+          `pending_invite_code=${encodeURIComponent(inviteCheck.code)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1800${requestIsHttps(c.req.raw) ? '; Secure' : ''}`
         )
         return new Response(redirected.body, { status: redirected.status, headers })
       }
@@ -626,7 +672,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const settings = await getSettings(c.env.DB)
     const cookieHeader = c.req.header('Cookie') || ''
     const pendingInvite = parseCookie(cookieHeader, 'pending_invite_code')
-    const clearInviteCookie = 'pending_invite_code=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
+    const clearInviteCookie = `pending_invite_code=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${requestIsHttps(c.req.raw) ? '; Secure' : ''}`
     if (!user) {
       return redirectWithHeaders('/login', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
     }
@@ -653,7 +699,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         settings.registration_enabled &&
         (settings.registration_mode === 'oauth' || settings.registration_mode === 'both')
       if (!oauthSignupAllowed) {
-        return await failOAuthRegister('??????? OAuth ?????', 403)
+        return await failOAuthRegister('当前不允许 OAuth 注册', 403)
       }
     }
 

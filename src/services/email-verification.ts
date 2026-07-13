@@ -107,51 +107,109 @@ export async function purgeExpiredEmailVerifications(db: D1Database, now = Date.
   await db.prepare('DELETE FROM email_verification WHERE expires_at < ?').bind(now).run()
 }
 
-
 const VERIFY_FAIL_WINDOW_MS = 10 * 60 * 1000
 const VERIFY_FAIL_MAX = 8
-const verifyFailBuckets = new Map<string, { count: number; resetAt: number }>()
+const RATE_SCOPE = 'email_verify_fail'
 
 function verifyFailKey(email: string, ip: string | null | undefined): string {
-  return `${email.toLowerCase()}|${ip || 'unknown'}`
+  return `${RATE_SCOPE}:${email.toLowerCase()}|${ip || 'unknown'}`
 }
 
-export function clearVerificationFailures(email: string, ip?: string | null): void {
-  verifyFailBuckets.delete(verifyFailKey(email, ip))
-}
-
-export function recordVerificationFailure(
+export async function clearVerificationFailures(
+  db: D1Database,
   email: string,
   ip?: string | null
-): { limited: boolean; remaining: number; retryAfterSec: number } {
+): Promise<void> {
+  await db
+    .prepare('DELETE FROM rate_limit_bucket WHERE key = ?')
+    .bind(verifyFailKey(email, ip))
+    .run()
+}
+
+export async function recordVerificationFailure(
+  db: D1Database,
+  email: string,
+  ip?: string | null
+): Promise<{ limited: boolean; remaining: number; retryAfterSec: number }> {
   const key = verifyFailKey(email, ip)
   const now = Date.now()
-  const current = verifyFailBuckets.get(key)
-  if (!current || now >= current.resetAt) {
-    verifyFailBuckets.set(key, { count: 1, resetAt: now + VERIFY_FAIL_WINDOW_MS })
-    return { limited: false, remaining: VERIFY_FAIL_MAX - 1, retryAfterSec: Math.ceil(VERIFY_FAIL_WINDOW_MS / 1000) }
+  const current = await db
+    .prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?')
+    .bind(key)
+    .first<{ count: number; reset_at: number }>()
+
+  if (!current || now >= Number(current.reset_at)) {
+    const resetAt = now + VERIFY_FAIL_WINDOW_MS
+    await db
+      .prepare(
+        `INSERT INTO rate_limit_bucket (key, count, reset_at)
+         VALUES (?, 1, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           count = 1,
+           reset_at = excluded.reset_at`
+      )
+      .bind(key, resetAt)
+      .run()
+    return {
+      limited: false,
+      remaining: VERIFY_FAIL_MAX - 1,
+      retryAfterSec: Math.ceil(VERIFY_FAIL_WINDOW_MS / 1000)
+    }
   }
-  current.count += 1
-  verifyFailBuckets.set(key, current)
-  const remaining = Math.max(0, VERIFY_FAIL_MAX - current.count)
+
+  // Atomic increment for an active window. If concurrent writers race, the higher count wins.
+  await db
+    .prepare(
+      `UPDATE rate_limit_bucket
+       SET count = count + 1
+       WHERE key = ? AND reset_at > ?`
+    )
+    .bind(key, now)
+    .run()
+
+  const updated = await db
+    .prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?')
+    .bind(key)
+    .first<{ count: number; reset_at: number }>()
+
+  const count = Math.max(1, Number(updated?.count ?? current.count + 1))
+  const resetAt = Number(updated?.reset_at ?? current.reset_at)
+  const remaining = Math.max(0, VERIFY_FAIL_MAX - count)
   return {
-    limited: current.count >= VERIFY_FAIL_MAX,
+    limited: count >= VERIFY_FAIL_MAX,
     remaining,
-    retryAfterSec: Math.max(1, Math.ceil((current.resetAt - now) / 1000))
+    retryAfterSec: Math.max(1, Math.ceil((resetAt - now) / 1000))
   }
 }
 
-export function isVerificationRateLimited(
+export async function isVerificationRateLimited(
+  db: D1Database,
   email: string,
   ip?: string | null
-): { limited: boolean; retryAfterSec: number } {
+): Promise<{ limited: boolean; retryAfterSec: number }> {
   const key = verifyFailKey(email, ip)
   const now = Date.now()
-  const current = verifyFailBuckets.get(key)
-  if (!current || now >= current.resetAt) return { limited: false, retryAfterSec: 0 }
-  if (current.count < VERIFY_FAIL_MAX) return { limited: false, retryAfterSec: 0 }
+  const current = await db
+    .prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?')
+    .bind(key)
+    .first<{ count: number; reset_at: number }>()
+
+  if (!current || now >= Number(current.reset_at)) {
+    if (current && now >= Number(current.reset_at)) {
+      await db.prepare('DELETE FROM rate_limit_bucket WHERE key = ?').bind(key).run()
+    }
+    return { limited: false, retryAfterSec: 0 }
+  }
+  if (Number(current.count) < VERIFY_FAIL_MAX) {
+    return { limited: false, retryAfterSec: 0 }
+  }
   return {
     limited: true,
-    retryAfterSec: Math.max(1, Math.ceil((current.resetAt - now) / 1000))
+    retryAfterSec: Math.max(1, Math.ceil((Number(current.reset_at) - now) / 1000))
   }
+}
+
+/** Opportunistic cleanup of expired rate-limit rows. */
+export async function purgeExpiredRateLimitBuckets(db: D1Database, now = Date.now()): Promise<void> {
+  await db.prepare('DELETE FROM rate_limit_bucket WHERE reset_at < ?').bind(now).run()
 }

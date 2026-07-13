@@ -12,7 +12,9 @@ import {
   updateRecordTarget
 } from '../services/dns-records'
 import {
+  cleanupCloudflareDnsRecords,
   createDnsRecord,
+  deleteCloudflareDnsRecord,
   deleteRecordAndCloudflare,
   fetchZoneId,
   findOccupiedRecords,
@@ -152,49 +154,70 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         )
       }
 
-      const targetRecord = await createDnsRecord(token, zoneId, {
-        type: targetRecordType,
-        name: hostName,
-        content: serverAddress,
-        ttl: 1,
-        proxied: false
-      })
+      let targetRecordId: string | null = null
+      let srvRecordId: string | null = null
+      try {
+        const targetRecord = await createDnsRecord(token, zoneId, {
+          type: targetRecordType,
+          name: hostName,
+          content: serverAddress,
+          ttl: 1,
+          proxied: false
+        })
+        targetRecordId = targetRecord.id
 
-      const srvRecord = await createDnsRecord(token, zoneId, {
-        type: 'SRV',
-        name: srvName,
-        ttl: 1,
-        data: { priority: 0, weight: 5, port, target: hostName }
-      })
+        const srvRecord = await createDnsRecord(token, zoneId, {
+          type: 'SRV',
+          name: srvName,
+          ttl: 1,
+          data: { priority: 0, weight: 5, port, target: hostName }
+        })
+        srvRecordId = srvRecord.id
 
-      const row = await insertRecord(c.env.DB, {
-        user_id: userId,
-        root_domain: rootDomain,
-        subdomain,
-        host_name: hostName,
-        server_address: serverAddress,
-        port,
-        target_type: targetRecordType,
-        target_record_id: targetRecord.id,
-        srv_record_id: srvRecord.id
-      })
-
-      const currentCount = await countRecordsByUser(c.env.DB, userId)
-
-      return c.json({
-        success: true,
-        message:
-          'DNS 记录已创建：' +
-          hostName +
-          ' -> ' +
-          serverAddress +
-          '，Minecraft Java 端口 ' +
+        const row = await insertRecord(c.env.DB, {
+          user_id: userId,
+          root_domain: rootDomain,
+          subdomain,
+          host_name: hostName,
+          server_address: serverAddress,
           port,
-        record: row,
-        record_count: currentCount,
-        record_limit: userRecordLimit,
-        records: { target: targetRecord, srv: srvRecord }
-      })
+          target_type: targetRecordType,
+          target_record_id: targetRecord.id,
+          srv_record_id: srvRecord.id
+        })
+
+        // Re-check after insert so concurrent creates cannot exceed the user limit.
+        const currentCount = await countRecordsByUser(c.env.DB, userId)
+        if (userRecordLimit > 0 && currentCount > userRecordLimit) {
+          await deleteRecordAndCloudflare(c.env, row)
+          return c.json(
+            {
+              success: false,
+              message: '已达记录数量上限（' + userRecordLimit + ' 条），无法继续创建'
+            },
+            403
+          )
+        }
+
+        return c.json({
+          success: true,
+          message:
+            'DNS 记录已创建：' +
+            hostName +
+            ' -> ' +
+            serverAddress +
+            '，Minecraft Java 端口 ' +
+            port,
+          record: row,
+          record_count: currentCount,
+          record_limit: userRecordLimit,
+          records: { target: targetRecord, srv: srvRecord }
+        })
+      } catch (err) {
+        // Roll back any Cloudflare records created before DB insert / later step failed.
+        await cleanupCloudflareDnsRecords(token, zoneId, [targetRecordId, srvRecordId])
+        throw err
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : '请求处理失败'
       return c.json({ success: false, message }, 500)
@@ -229,7 +252,6 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       record_limit: recordLimit
     })
   })
-
 
   app.post('/api/dns/:id/update', async (c) => {
     try {
@@ -288,71 +310,73 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       const srvName = '_minecraft._tcp.' + hostName
 
       let targetRecordId = record.target_record_id
-      if (record.target_type === targetRecordType) {
-        await updateDnsRecord(token, zoneId, record.target_record_id, {
-          type: targetRecordType,
-          name: hostName,
-          content: serverAddress,
-          ttl: 1,
-          proxied: false
-        })
-      } else {
-        const created = await createDnsRecord(token, zoneId, {
-          type: targetRecordType,
-          name: hostName,
-          content: serverAddress,
-          ttl: 1,
-          proxied: false
-        })
-        targetRecordId = created.id
-        await fetch(
-          `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${record.target_record_id}`,
-          {
-            method: 'DELETE',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        ).catch(() => null)
-      }
-
       let srvRecordId = record.srv_record_id
-      if (srvRecordId) {
-        await updateDnsRecord(token, zoneId, srvRecordId, {
-          type: 'SRV',
-          name: srvName,
-          ttl: 1,
-          data: { priority: 0, weight: 5, port, target: hostName }
+      let createdTargetId: string | null = null
+      let createdSrvId: string | null = null
+
+      try {
+        if (record.target_type === targetRecordType) {
+          await updateDnsRecord(token, zoneId, record.target_record_id, {
+            type: targetRecordType,
+            name: hostName,
+            content: serverAddress,
+            ttl: 1,
+            proxied: false
+          })
+        } else {
+          // Cloudflare does not allow A/AAAA/CNAME to coexist on the same name.
+          // Delete the old target first, then create the new type.
+          await deleteCloudflareDnsRecord(token, zoneId, record.target_record_id)
+          const created = await createDnsRecord(token, zoneId, {
+            type: targetRecordType,
+            name: hostName,
+            content: serverAddress,
+            ttl: 1,
+            proxied: false
+          })
+          createdTargetId = created.id
+          targetRecordId = created.id
+        }
+
+        if (srvRecordId) {
+          await updateDnsRecord(token, zoneId, srvRecordId, {
+            type: 'SRV',
+            name: srvName,
+            ttl: 1,
+            data: { priority: 0, weight: 5, port, target: hostName }
+          })
+        } else {
+          const srvRecord = await createDnsRecord(token, zoneId, {
+            type: 'SRV',
+            name: srvName,
+            ttl: 1,
+            data: { priority: 0, weight: 5, port, target: hostName }
+          })
+          createdSrvId = srvRecord.id
+          srvRecordId = srvRecord.id
+        }
+
+        const updated = await updateRecordTarget(c.env.DB, record.id, {
+          server_address: serverAddress,
+          port,
+          target_type: targetRecordType,
+          target_record_id: targetRecordId,
+          srv_record_id: srvRecordId
         })
-      } else {
-        const srvRecord = await createDnsRecord(token, zoneId, {
-          type: 'SRV',
-          name: srvName,
-          ttl: 1,
-          data: { priority: 0, weight: 5, port, target: hostName }
+
+        return c.json({
+          success: true,
+          message: 'DNS 记录已更新：' + hostName + ' -> ' + serverAddress + '，端口 ' + port,
+          record: updated
         })
-        srvRecordId = srvRecord.id
+      } catch (err) {
+        // Best-effort cleanup for records created during this update attempt.
+        await cleanupCloudflareDnsRecords(token, zoneId, [createdTargetId, createdSrvId])
+        throw err
       }
-
-      const updated = await updateRecordTarget(c.env.DB, record.id, {
-        server_address: serverAddress,
-        port,
-        target_type: targetRecordType,
-        target_record_id: targetRecordId,
-        srv_record_id: srvRecordId
-      })
-
-      return c.json({
-        success: true,
-        message: 'DNS 记录已更新：' + hostName + ' -> ' + serverAddress + '，端口 ' + port,
-        record: updated
-      })
     } catch (err) {
       const message = err instanceof Error ? err.message : '请求处理失败'
       return c.json({ success: false, message }, 500)
     }
   })
-
-
 }

@@ -70,9 +70,23 @@ export async function deleteRecordAndCloudflare(
   await deleteRecordRow(env.DB, record.id)
 }
 
-async function deleteCloudflareDnsRecord(token: string, zoneId: string, recordId: string): Promise<void> {
+export async function deleteCloudflareDnsRecord(
+  token: string,
+  zoneId: string,
+  recordId: string | null | undefined
+): Promise<void> {
+  if (!recordId) return
   const url = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${recordId}`
   await sendCloudflareRequest(token, url, { method: 'DELETE' })
+}
+
+export async function cleanupCloudflareDnsRecords(
+  token: string,
+  zoneId: string,
+  recordIds: Array<string | null | undefined>
+): Promise<void> {
+  const unique = [...new Set(recordIds.filter((id): id is string => !!id))]
+  await Promise.all(unique.map((id) => deleteCloudflareDnsRecord(token, zoneId, id).catch(() => {})))
 }
 
 

@@ -1,10 +1,11 @@
 import type { FC } from 'hono/jsx'
 import type { DnsRecordRow } from '../services/dns-records'
 
-export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[] }> = ({
+export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[]; csrfToken: string }> = ({
   email,
   role,
-  records
+  records,
+  csrfToken
 }) => {
   return (
     <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-12">
@@ -46,7 +47,10 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
                   管理后台
                 </a>
               )}
-              <a href="/logout" class="text-rose-400 hover:text-rose-300 transition font-medium">退出登录</a>
+              <form method="post" action="/logout" class="inline">
+                <input type="hidden" name="csrf_token" value={csrfToken} />
+                <button type="submit" class="text-rose-400 hover:text-rose-300 transition font-medium">退出登录</button>
+              </form>
             </div>
           </div>
         </div>

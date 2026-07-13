@@ -99,7 +99,9 @@ export async function createAuth(
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
-      autoSignIn: true
+      // Keep false so admin-created users and public registration do not replace
+      // the current browser session. Setup explicitly signs in after creation.
+      autoSignIn: false
     },
     databaseHooks: {
       user: {

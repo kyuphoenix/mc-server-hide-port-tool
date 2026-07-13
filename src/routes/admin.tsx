@@ -29,7 +29,7 @@ import {
   updateOAuthProvider
 } from '../services/oauth-providers'
 import { deleteRecordAndCloudflare, type Bindings } from '../services/cloudflare-dns'
-import { splitCsv } from '../lib/http'
+import { splitCsv, withoutSetCookieHeaders } from '../lib/http'
 import { getRequestCsrf, requireMutationCsrf, withCsrfCookie } from '../lib/csrf'
 
 type AdminTab = 'settings' | 'oauth' | 'invites' | 'users' | 'dns'
@@ -75,7 +75,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     ])
     const csrf = getRequestCsrf(c)
     const html = c.html(
-      <Layout title="????">
+      <Layout title="管理后台">
         <AdminView
           users={users}
           records={records}
@@ -211,19 +211,22 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const role = isSuperAdminUser(admin) && String(form.get('role') ?? 'user') === 'admin' ? 'admin' : 'user'
 
     if (!name || !email || password.length < 8) {
-      return c.redirect(adminPath('users', { create_error: '??????????8?' }))
+      return c.redirect(adminPath('users', { create_error: '请填写完整信息，密码至少 8 位' }))
     }
 
     const auth = await createAuth(c.env)
     try {
+      // asResponse + strip Set-Cookie so auto-login cannot replace the admin session.
       const signUpRes = await auth.api.signUpEmail({
         body: { name, email, password },
         headers: c.req.raw.headers,
         asResponse: true
       })
+      // Explicitly drop any session cookies from nested better-auth response.
+      withoutSetCookieHeaders(signUpRes.headers)
       if (!signUpRes.ok) {
         const data = await signUpRes.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || '??????'
+        const msg = (data as { message?: string }).message || '创建用户失败'
         return c.redirect(adminPath('users', { create_error: msg }))
       }
       const listRes = await listAllUsers(c.env.DB)
@@ -232,7 +235,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
         await setUserRole(c.env.DB, newUser.id, 'admin')
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '??????'
+      const msg = err instanceof Error ? err.message : '创建用户失败'
       return c.redirect(adminPath('users', { create_error: msg }))
     }
     return c.redirect(adminPath('users'))
@@ -260,13 +263,13 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (csrfDenied) return csrfDenied
     const settings = await getSettings(c.env.DB)
     if (!settings.invite_required) {
-      return c.redirect(adminPath('invites', { invite_error: '?????????' }))
+      return c.redirect(adminPath('invites', { invite_error: '请先开启邀请码注册' }))
     }
     try {
       const created = await createInviteCode(c.env.DB, admin.id)
-      return c.redirect(adminPath('invites', { invite_info: `?????? ${created.code}` }))
+      return c.redirect(adminPath('invites', { invite_info: `已创建邀请码 ${created.code}` }))
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '???????'
+      const msg = err instanceof Error ? err.message : '创建邀请码失败'
       return c.redirect(adminPath('invites', { invite_error: msg }))
     }
   })
@@ -282,7 +285,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!result.ok) {
       return c.redirect(adminPath('invites', { invite_error: result.message }))
     }
-    return c.redirect(adminPath('invites', { invite_info: '??????' }))
+    return c.redirect(adminPath('invites', { invite_info: '邀请码已作废' }))
   })
 
   app.post('/admin/oauth/create', async (c) => {
@@ -309,7 +312,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!result.ok) {
       return c.redirect(adminPath('oauth', { oauth_error: result.message }))
     }
-    return c.redirect(adminPath('oauth', { oauth_info: `??? OAuth ?? ${result.provider.name}` }))
+    return c.redirect(adminPath('oauth', { oauth_info: `已添加 OAuth 应用 ${result.provider.name}` }))
   })
 
   app.post('/admin/oauth/:id/update', async (c) => {
@@ -337,7 +340,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!result.ok) {
       return c.redirect(adminPath('oauth', { oauth_error: result.message }))
     }
-    return c.redirect(adminPath('oauth', { oauth_info: 'OAuth ?????' }))
+    return c.redirect(adminPath('oauth', { oauth_info: '已更新' }))
   })
 
   app.post('/admin/oauth/:id/toggle', async (c) => {
@@ -349,7 +352,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const id = c.req.param('id')
     const enabled = form.get('enabled') === '1'
     await setOAuthProviderEnabled(c.env.DB, id, enabled)
-    return c.redirect(adminPath('oauth', { oauth_info: enabled ? '???' : '???' }))
+    return c.redirect(adminPath('oauth', { oauth_info: enabled ? '已启用' : '已停用' }))
   })
 
   app.post('/admin/oauth/:id/delete', async (c) => {
@@ -360,6 +363,6 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (csrfDenied) return csrfDenied
     const id = c.req.param('id')
     await deleteOAuthProvider(c.env.DB, id)
-    return c.redirect(adminPath('oauth', { oauth_info: 'OAuth ?????' }))
+    return c.redirect(adminPath('oauth', { oauth_info: '已删除' }))
   })
 }
