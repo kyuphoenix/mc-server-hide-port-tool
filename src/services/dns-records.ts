@@ -202,6 +202,7 @@ export async function deleteUserCascade(db: D1Database, id: string): Promise<voi
   await db.prepare('DELETE FROM dns_record WHERE user_id = ?').bind(id).run()
   await db.prepare('DELETE FROM session WHERE userId = ?').bind(id).run()
   await db.prepare('DELETE FROM account WHERE userId = ?').bind(id).run()
+  await db.prepare('DELETE FROM passkey WHERE userId = ?').bind(id).run()
   // Keep invite history, but detach FK references that would block user deletion.
   await db.prepare('UPDATE invite_code SET used_by = NULL WHERE used_by = ?').bind(id).run()
   await db.prepare('DELETE FROM invite_code WHERE created_by = ? AND used_by IS NULL').bind(id).run()

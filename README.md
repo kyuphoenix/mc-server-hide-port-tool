@@ -115,6 +115,7 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
 - `0004_oauth_providers.sql` — 通用 OAuth 应用表
 - `0005_oauth_unify_github.sql` — OAuth `icon_url`；注册模式 `github` 归一为 `oauth`
 - `0006_schema_hardening.sql` — 唯一索引、冗余索引清理、过期字段索引
+- `0007_passkey.sql` — Passkey 表（个人设置绑定 WebAuthn）
 
 4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
 
@@ -149,7 +150,8 @@ src/
   routes/
     auth.tsx                          # 登录/注册/OAuth/setup
     dns.tsx                           # 用户 DNS API 与删除
-    admin.tsx                         # 管理后台
+    admin.tsx
+    settings.tsx                         # 个人设置                         # 管理后台
   lib/
     http.ts                           # 重定向/Cookie/CSV 等通用辅助
     invite.ts                         # 邀请码校验与消费
@@ -168,6 +170,7 @@ src/
     LoginView.tsx / RegisterView.tsx
     GitHubAgeRejectedView.tsx
     AdminView.tsx
+    SettingsView.tsx
     IndexView.tsx / SetupView.tsx / VerifyEmailView.tsx / Layout.tsx
 public/static/
   main.js
@@ -186,6 +189,7 @@ migrations/
   0004_oauth_providers.sql
   0005_oauth_unify_github.sql
   0006_schema_hardening.sql
+  0007_passkey.sql
 ```
 
 ## 权限与限制摘要

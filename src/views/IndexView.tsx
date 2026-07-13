@@ -30,6 +30,13 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
             </div>
             
             <div class="flex items-center gap-4">
+              <a href="/settings" class="text-slate-300 hover:text-white transition flex items-center gap-1.5 font-medium">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A9 9 0 1118.88 6.196 9 9 0 015.12 17.804z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                个人设置
+              </a>
               {role === 'admin' && (
                 <a href="/admin" class="text-slate-300 hover:text-white transition flex items-center gap-1.5 font-medium">
                   <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

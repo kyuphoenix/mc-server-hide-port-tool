@@ -1,5 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { genericOAuth } from 'better-auth/plugins'
+import { passkey } from '@better-auth/passkey'
 import {
   listEnabledOAuthProviders,
   toGenericOAuthConfig,
@@ -15,6 +16,24 @@ export type AuthBindings = {
 
 export type Auth = ReturnType<typeof betterAuth>
 
+function resolvePasskeyRp(env: AuthBindings): { rpID: string; rpName: string; origin?: string } {
+  const appName = env.APP_NAME || 'hide-port-tool'
+  const base = (env.BETTER_AUTH_URL || '').trim()
+  if (!base) {
+    return { rpID: 'localhost', rpName: appName }
+  }
+  try {
+    const url = new URL(base)
+    return {
+      rpID: url.hostname,
+      rpName: appName,
+      origin: url.origin
+    }
+  } catch {
+    return { rpID: 'localhost', rpName: appName }
+  }
+}
+
 export async function createAuth(
   env: AuthBindings,
   oauthProviders?: OAuthProviderRow[]
@@ -23,6 +42,22 @@ export async function createAuth(
     oauthProviders ?? (await listEnabledOAuthProviders(env.DB).catch(() => [] as OAuthProviderRow[]))
 
   const genericConfigs = providers.map((p) => toGenericOAuthConfig(p, env.DB))
+  const passkeyRp = resolvePasskeyRp(env)
+
+  const plugins = [
+    passkey({
+      rpID: passkeyRp.rpID,
+      rpName: passkeyRp.rpName,
+      origin: passkeyRp.origin
+    }),
+    ...(genericConfigs.length > 0
+      ? [
+          genericOAuth({
+            config: genericConfigs
+          })
+        ]
+      : [])
+  ]
 
   return betterAuth({
     appName: env.APP_NAME || 'hide-port-tool',
@@ -33,6 +68,17 @@ export async function createAuth(
       enabled: true,
       minPasswordLength: 8,
       autoSignIn: true
+    },
+    session: {
+      // 设置页添加 Passkey / 解绑账号会走 fresh session 校验；关闭以避免长会话无法操作
+      freshAge: 0
+    },
+    account: {
+      accountLinking: {
+        enabled: true,
+        // OAuth providers often supply synthetic / different emails; allow binding anyway.
+        allowDifferentEmails: true
+      }
     },
     user: {
       additionalFields: {
@@ -56,14 +102,7 @@ export async function createAuth(
         }
       }
     },
-    plugins:
-      genericConfigs.length > 0
-        ? [
-            genericOAuth({
-              config: genericConfigs
-            })
-          ]
-        : []
+    plugins
   })
 }
 
