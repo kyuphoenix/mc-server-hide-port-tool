@@ -222,7 +222,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const csrf = getRequestCsrf(c)
     const html = c.html(
       <Layout title="Minecraft 端口隐藏工具">
-        <IndexView email={user.email} role={user.role ?? 'user'} records={records} csrfToken={csrf.token} />
+        <IndexView name={user.name} email={user.email} role={user.role ?? 'user'} records={records} csrfToken={csrf.token} />
       </Layout>
     )
     return withCsrfCookie(await html, csrf.setCookie)

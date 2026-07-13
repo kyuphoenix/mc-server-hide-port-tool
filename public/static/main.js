@@ -49,8 +49,48 @@ document.addEventListener('DOMContentLoaded', () => {
   if (cancelEditBtn) {
     cancelEditBtn.addEventListener('click', () => clearEditMode());
   }
+  initUserMenu();
 });
 button.addEventListener('click', submitDnsForm);
+
+
+function initUserMenu() {
+  const root = document.getElementById('user-menu');
+  const toggle = document.getElementById('user-menu-toggle');
+  const panel = document.getElementById('user-menu-panel');
+  const chevron = document.getElementById('user-menu-chevron');
+  if (!root || !toggle || !panel) return;
+
+  const setOpen = (open) => {
+    if (open) {
+      panel.classList.remove('hidden');
+      toggle.setAttribute('aria-expanded', 'true');
+      if (chevron) chevron.classList.add('rotate-180');
+    } else {
+      panel.classList.add('hidden');
+      toggle.setAttribute('aria-expanded', 'false');
+      if (chevron) chevron.classList.remove('rotate-180');
+    }
+  };
+
+  const isOpen = () => !panel.classList.contains('hidden');
+
+  toggle.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(!isOpen());
+  });
+
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (!root.contains(target)) setOpen(false);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') setOpen(false);
+  });
+}
 
 async function loadDomains() {
   setButtonEnabled(false);
