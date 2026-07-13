@@ -467,8 +467,12 @@ export function toGenericOAuthConfig(row: OAuthProviderRow, db: D1Database) {
             settings.github_min_account_age_days > 0 &&
             !meetsAgeRequirement(profile.created_at, settings.github_min_account_age_days)
           ) {
+            const createdMs = Date.parse(profile.created_at)
+            const actualDays = Number.isFinite(createdMs)
+              ? (Date.now() - createdMs) / 86400000
+              : null
             // Throwing aborts OAuth callback before better-auth creates user/session.
-            throwGitHubAgeRejected(settings.github_min_account_age_days)
+            throwGitHubAgeRejected(settings.github_min_account_age_days, actualDays)
           }
         }
 

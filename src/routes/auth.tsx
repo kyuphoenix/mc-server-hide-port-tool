@@ -34,11 +34,11 @@ import {
 } from '../services/email-verification'
 import { sendVerificationCode } from '../services/mailer'
 import {
+  extractGitHubAgeRejectedDetails,
   getGitHubUser,
   githubAgeRejectedPath,
   isGitHubAgeRejectedError,
-  meetsAgeRequirement,
-  parseGitHubAgeRejectedMinDays
+  meetsAgeRequirement
 } from '../services/github'
 import { type Bindings } from '../services/cloudflare-dns'
 import { parseCookie, redirectFromOAuthResponse, redirectWithHeaders } from '../lib/http'
@@ -47,24 +47,53 @@ import { finalizeInviteUsage, findUserIdByEmail, requireInviteCodeIfNeeded } fro
 export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.all('/api/auth/*', async (c) => {
     const auth = await createAuth(c.env)
-    const res = await auth.handler(c.req.raw)
+    const pathname = new URL(c.req.url).pathname
+    const isGitHubOAuthCallback =
+      pathname.endsWith('/oauth2/callback/github') ||
+      pathname.includes('/oauth2/callback/github')
 
-    // GitHub age rejection throws inside getUserInfo; better-auth surfaces it as 4xx/5xx.
-    // Convert to a dedicated rejection page instead of a raw error/500.
-    if (res.status >= 400 && c.req.path.includes('/oauth2/callback/github')) {
-      let bodyText = ''
-      try {
-        bodyText = await res.clone().text()
-      } catch {
-        bodyText = ''
+    const redirectAgeRejected = async (value: unknown) => {
+      const settings = await getSettings(c.env.DB)
+      const details = extractGitHubAgeRejectedDetails(value, settings.github_min_account_age_days)
+      return c.redirect(githubAgeRejectedPath(details.minDays, details.actualDays))
+    }
+
+    let res: Response
+    try {
+      res = await auth.handler(c.req.raw)
+    } catch (err) {
+      // Plain thrown errors (or APIError with throw mode) should still land on the rejection page.
+      if (isGitHubOAuthCallback && isGitHubAgeRejectedError(err)) {
+        return await redirectAgeRejected(err)
       }
-      if (isGitHubAgeRejectedError(bodyText)) {
-        const settings = await getSettings(c.env.DB)
-        const parsed = parseGitHubAgeRejectedMinDays(bodyText)
-        const minDays = parsed ?? settings.github_min_account_age_days
-        return c.redirect(githubAgeRejectedPath(minDays))
+      throw err
+    }
+
+    // GitHub age rejection is thrown inside getUserInfo. better-auth/better-call turns
+    // APIError into a 4xx JSON body (or sometimes a redirect to the error page).
+    // Convert both into the dedicated rejection page so users leave the callback URL.
+    if (isGitHubOAuthCallback) {
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location') || ''
+        if (isGitHubAgeRejectedError(location) || location.includes('error=GITHUB_ACCOUNT_AGE_REJECTED')) {
+          return await redirectAgeRejected(decodeURIComponent(location))
+        }
+      }
+
+      if (res.status >= 400) {
+        let bodyText = ''
+        try {
+          bodyText = await res.clone().text()
+        } catch {
+          bodyText = ''
+        }
+
+        if (isGitHubAgeRejectedError(bodyText) || isGitHubAgeRejectedError(res.statusText)) {
+          return await redirectAgeRejected(bodyText || res.statusText)
+        }
       }
     }
+
     return res
   })
 
@@ -591,12 +620,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
           const actualDays = ghUser
             ? (Date.now() - Date.parse(ghUser.created_at)) / 86400000
             : null
-          const path =
-            githubAgeRejectedPath(settings.github_min_account_age_days) +
-            (actualDays != null && Number.isFinite(actualDays)
-              ? `&actual_days=${encodeURIComponent(String(Math.max(0, Math.floor(actualDays))))}`
-              : '')
-          return redirectWithHeaders(path, 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
+          return redirectWithHeaders(
+            githubAgeRejectedPath(settings.github_min_account_age_days, actualDays),
+            302,
+            new Headers({ 'Set-Cookie': clearInviteCookie })
+          )
         }
       }
     }
