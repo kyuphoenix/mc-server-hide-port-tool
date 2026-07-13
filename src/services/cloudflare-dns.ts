@@ -322,6 +322,66 @@ async function findDnsRecordsByName(
   return data.result
 }
 
+
+export async function updateDnsRecord(
+  token: string,
+  zoneId: string,
+  recordId: string,
+  body: DnsRecordBody
+): Promise<CloudflareDnsRecord> {
+  const url = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${recordId}`
+  const data = await sendCloudflareRequest<CloudflareSingleResult<CloudflareDnsRecord>>(token, url, {
+    method: 'PUT',
+    body: JSON.stringify(body)
+  })
+
+  if (!data.success) {
+    throw new Error(getCloudflareErrorMessage(data.errors))
+  }
+
+  return data.result
+}
+
+export function parseUpdateDnsRequest(
+  body: unknown
+):
+  | {
+      ok: true
+      value: {
+        serverAddress: string
+        port: number
+        targetRecordType: 'A' | 'AAAA' | 'CNAME'
+      }
+    }
+  | { ok: false; message: string } {
+  if (!body || typeof body !== 'object') {
+    return { ok: false, message: '请求体格式不正确' }
+  }
+
+  const data = body as Record<string, unknown>
+  const rawServerAddress = String(data.serverAddress ?? data.ip ?? '').trim()
+  const serverAddress = normalizeServerAddress(rawServerAddress)
+  const port = parsePort(data.port)
+  const targetRecordType = getTargetRecordType(serverAddress)
+
+  if (!targetRecordType) {
+    return { ok: false, message: '服务器地址必须是合法的 IPv4、IPv6 或域名' }
+  }
+
+  if (!port) {
+    return { ok: false, message: '端口必须是 1 到 65535 之间的整数' }
+  }
+
+  return {
+    ok: true,
+    value: {
+      serverAddress,
+      port,
+      targetRecordType
+    }
+  }
+}
+
 export async function createDnsRecord(
   token: string,
   zoneId: string,

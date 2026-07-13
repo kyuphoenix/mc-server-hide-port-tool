@@ -75,6 +75,36 @@ export async function insertRecord(
   return { ...record, id, created_at }
 }
 
+
+export async function updateRecordTarget(
+  db: D1Database,
+  id: string,
+  patch: {
+    server_address: string
+    port: number
+    target_type: string
+    target_record_id: string
+    srv_record_id: string | null
+  }
+): Promise<DnsRecordRow | null> {
+  await db
+    .prepare(
+      `UPDATE dns_record
+       SET server_address = ?, port = ?, target_type = ?, target_record_id = ?, srv_record_id = ?
+       WHERE id = ?`
+    )
+    .bind(
+      patch.server_address,
+      patch.port,
+      patch.target_type,
+      patch.target_record_id,
+      patch.srv_record_id,
+      id
+    )
+    .run()
+  return await findRecordById(db, id)
+}
+
 export async function deleteRecordRow(db: D1Database, id: string): Promise<void> {
   await db.prepare('DELETE FROM dns_record WHERE id = ?').bind(id).run()
 }

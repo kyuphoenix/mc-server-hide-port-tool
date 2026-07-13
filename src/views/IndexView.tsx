@@ -53,12 +53,13 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
       </header>
 
       {/* Main Content Dashboard */}
+      <div id="toast-root" class="fixed top-20 right-4 z-50 space-y-2 w-[min(92vw,22rem)]"></div>
       <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-10">
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           {/* Create Form Container */}
           <div class="lg:col-span-1 bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-6 h-fit shadow-xl">
-            <h3 class="text-lg font-bold text-white mb-6 flex items-center gap-2">
+            <h3 id="form-title" class="text-lg font-bold text-white mb-6 flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -66,6 +67,10 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
             </h3>
             
             <div class="space-y-4">
+              <input type="hidden" id="editing-id" value="" />
+              <div id="editing-banner" class="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                正在修改已有记录：主机名不可更改，仅更新目标地址与端口。
+              </div>
               <div>
                 <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">期望的子域名</label>
                 <div class="flex items-center bg-slate-950/60 border border-slate-800 rounded-xl focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500 overflow-hidden transition">
@@ -106,13 +111,18 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
                 />
               </div>
 
-              <button 
-                id="btn" 
-                disabled 
-                class="w-full mt-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 disabled:cursor-not-allowed text-white font-medium rounded-xl transition duration-200 transform active:scale-[0.98] shadow-lg shadow-emerald-950/50"
-              >
-                一键生成
-              </button>
+              <div class="mt-2 flex gap-2">
+                <button
+                  id="btn"
+                  disabled
+                  class="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 disabled:cursor-not-allowed text-white font-medium rounded-xl transition duration-200 transform active:scale-[0.98] shadow-lg shadow-emerald-950/50"
+                >一键生成</button>
+                <button
+                  type="button"
+                  id="cancel-edit-btn"
+                  class="hidden px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl border border-slate-700 transition"
+                >取消</button>
+              </div>
             </div>
           </div>
 
@@ -150,13 +160,23 @@ export const IndexView: FC<{ email: string; role: string; records: DnsRecordRow[
                       <td class="py-4 px-4 font-mono-custom text-slate-300">{r.port}</td>
                       <td class="py-4 px-4 text-slate-400 text-xs">{new Date(r.created_at).toLocaleString('zh-CN')}</td>
                       <td class="py-4 px-4 text-right">
-                        <button
-                          type="button"
-                          data-delete-id={r.id}
-                          class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition active:scale-[0.98]"
-                        >
-                          删除
-                        </button>
+                        <div class="inline-flex items-center gap-2">
+                          <button
+                            type="button"
+                            data-edit-id={r.id}
+                            data-host-name={r.host_name}
+                            data-root-domain={r.root_domain}
+                            data-subdomain={r.subdomain}
+                            data-server-address={r.server_address}
+                            data-port={String(r.port)}
+                            class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition active:scale-[0.98]"
+                          >修改</button>
+                          <button
+                            type="button"
+                            data-delete-id={r.id}
+                            class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition active:scale-[0.98]"
+                          >删除</button>
+                        </div>
                       </td>
                     </tr>
                   ))}

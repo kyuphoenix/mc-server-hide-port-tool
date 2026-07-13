@@ -8,7 +8,8 @@ import {
   findUserById,
   insertRecord,
   resolveMinSubdomainLength,
-  resolveUserRecordLimit
+  resolveUserRecordLimit,
+  updateRecordTarget
 } from '../services/dns-records'
 import {
   createDnsRecord,
@@ -18,6 +19,8 @@ import {
   getAllowedDomains,
   getCloudflareApiToken,
   parseCreateDnsRequest,
+  parseUpdateDnsRequest,
+  updateDnsRecord,
   type Bindings
 } from '../services/cloudflare-dns'
 import { isSameOriginMutation, verifyCsrfToken } from '../lib/security'
@@ -226,5 +229,130 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       record_limit: recordLimit
     })
   })
+
+
+  app.post('/api/dns/:id/update', async (c) => {
+    try {
+      const session = await getCurrentSession(c.env, c.req.raw.headers)
+      if (!session) {
+        return c.json({ success: false, message: '未登录，请先登录' }, 401)
+      }
+      const csrfDenied = await requireDnsMutationAuth(c)
+      if (csrfDenied) return csrfDenied
+
+      const id = c.req.param('id')
+      const record = await findRecordById(c.env.DB, id)
+      if (!record) {
+        return c.json({ success: false, message: '记录不存在' }, 404)
+      }
+      if (record.user_id !== session.user.id) {
+        return c.json({ success: false, message: '无权修改该记录' }, 403)
+      }
+
+      const body = await c.req.json()
+      const request = parseUpdateDnsRequest(body)
+      if (!request.ok) {
+        return c.json({ success: false, message: request.message }, 400)
+      }
+
+      const { serverAddress, port, targetRecordType } = request.value
+      if (targetRecordType === 'CNAME' && serverAddress === record.host_name) {
+        return c.json({ success: false, message: '目标域名不能和要创建的域名相同' }, 400)
+      }
+
+      if (
+        record.server_address === serverAddress &&
+        Number(record.port) === port &&
+        record.target_type === targetRecordType
+      ) {
+        return c.json({
+          success: true,
+          message: '记录未变化',
+          record
+        })
+      }
+
+      const token = getCloudflareApiToken(c.env, record.root_domain)
+      if (!token) {
+        return c.json(
+          {
+            success: false,
+            message: '后端未配置根域名 ' + record.root_domain + ' 对应的 CLOUDFLARE_API_TOKEN'
+          },
+          500
+        )
+      }
+
+      const zoneId = await fetchZoneId(token, record.root_domain)
+      const hostName = record.host_name
+      const srvName = '_minecraft._tcp.' + hostName
+
+      let targetRecordId = record.target_record_id
+      if (record.target_type === targetRecordType) {
+        await updateDnsRecord(token, zoneId, record.target_record_id, {
+          type: targetRecordType,
+          name: hostName,
+          content: serverAddress,
+          ttl: 1,
+          proxied: false
+        })
+      } else {
+        const created = await createDnsRecord(token, zoneId, {
+          type: targetRecordType,
+          name: hostName,
+          content: serverAddress,
+          ttl: 1,
+          proxied: false
+        })
+        targetRecordId = created.id
+        await fetch(
+          `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${record.target_record_id}`,
+          {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        ).catch(() => null)
+      }
+
+      let srvRecordId = record.srv_record_id
+      if (srvRecordId) {
+        await updateDnsRecord(token, zoneId, srvRecordId, {
+          type: 'SRV',
+          name: srvName,
+          ttl: 1,
+          data: { priority: 0, weight: 5, port, target: hostName }
+        })
+      } else {
+        const srvRecord = await createDnsRecord(token, zoneId, {
+          type: 'SRV',
+          name: srvName,
+          ttl: 1,
+          data: { priority: 0, weight: 5, port, target: hostName }
+        })
+        srvRecordId = srvRecord.id
+      }
+
+      const updated = await updateRecordTarget(c.env.DB, record.id, {
+        server_address: serverAddress,
+        port,
+        target_type: targetRecordType,
+        target_record_id: targetRecordId,
+        srv_record_id: srvRecordId
+      })
+
+      return c.json({
+        success: true,
+        message: 'DNS 记录已更新：' + hostName + ' -> ' + serverAddress + '，端口 ' + port,
+        record: updated
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '请求处理失败'
+      return c.json({ success: false, message }, 500)
+    }
+  })
+
 
 }
