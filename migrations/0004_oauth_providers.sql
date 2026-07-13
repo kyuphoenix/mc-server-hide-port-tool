@@ -1,4 +1,4 @@
-﻿-- Migration: 0004_oauth_providers
+-- Migration: 0004_oauth_providers
 -- 通用 OAuth 提供商配置（由管理后台维护，运行时注入 better-auth genericOAuth）
 
 CREATE TABLE IF NOT EXISTS "oauth_provider" (
@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS "oauth_provider" (
   "pkce" INTEGER NOT NULL DEFAULT 1,
   "enabled" INTEGER NOT NULL DEFAULT 1,
   "sort_order" INTEGER NOT NULL DEFAULT 0,
+  "icon_url" TEXT,
   "created_at" INTEGER NOT NULL,
   "updated_at" INTEGER NOT NULL
 );

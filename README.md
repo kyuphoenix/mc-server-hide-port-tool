@@ -81,7 +81,6 @@ https://your-domain.example/api/auth/oauth2/callback/github
    - `email`：仅邮箱
    - `oauth`：仅 OAuth
    - `both`：邮箱 + OAuth
-   - 旧值 `github` 读取时会归一为 `oauth`
 5. 未满足 GitHub 天数要求时，会跳转到 `/register/github-age-rejected`，不会创建本地账号。
 
 ## 本地开发
@@ -113,9 +112,10 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
 - `0002_super_admin_and_limits.sql` — `super_admin` / `record_limit`，以及全局记录/子域名限制
 - `0003_invite_codes.sql` — 邀请码
 - `0004_oauth_providers.sql` — 通用 OAuth 应用表
-- `0005_oauth_unify_github.sql` — OAuth `icon_url`；注册模式 `github` 归一为 `oauth`
+- `0005_oauth_unify_github.sql` — 迁移序号占位（icon_url 已在 0004）
 - `0006_schema_hardening.sql` — 唯一索引、冗余索引清理、过期字段索引
 - `0007_passkey.sql` — Passkey 表（个人设置绑定 WebAuthn）
+- `0008_numeric_user_ids.sql` — `user_id_counter`：新用户 id 按注册顺序从 1 递增
 
 4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
 
@@ -190,6 +190,7 @@ migrations/
   0005_oauth_unify_github.sql
   0006_schema_hardening.sql
   0007_passkey.sql
+  0008_numeric_user_ids.sql
 ```
 
 ## 权限与限制摘要

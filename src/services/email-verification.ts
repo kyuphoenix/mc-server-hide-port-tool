@@ -18,13 +18,6 @@ export async function hashVerificationCode(code: string): Promise<string> {
 }
 
 export async function verifyVerificationCode(code: string, codeHash: string): Promise<boolean> {
-  // Support legacy sha256 hex hashes (64 lowercase hex chars) during transition.
-  if (/^[a-f0-9]{64}$/i.test(codeHash)) {
-    const data = new TextEncoder().encode(code)
-    const digest = await crypto.subtle.digest('SHA-256', data)
-    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
-    return hex === codeHash.toLowerCase()
-  }
   try {
     return await verifyPassword({ hash: codeHash, password: code })
   } catch {
@@ -35,17 +28,16 @@ export async function verifyVerificationCode(code: string, codeHash: string): Pr
 /** Encrypt pending signup password with app secret. */
 export async function sealPendingPassword(secret: string | undefined, password: string): Promise<string> {
   if (!secret) {
-    // Fallback keeps system working in misconfigured env, but is not ideal.
-    return password
+    throw new Error('Cannot seal pending signup password: missing BETTER_AUTH_SECRET')
   }
   const cipher = await symmetricEncrypt({ key: secret, data: password })
   return `${ENC_PREFIX}${cipher}`
 }
 
-/** Decrypt pending signup password; supports legacy plaintext rows. */
+/** Decrypt pending signup password. */
 export async function openPendingPassword(secret: string | undefined, stored: string): Promise<string> {
   if (!stored.startsWith(ENC_PREFIX)) {
-    return stored
+    throw new Error('Invalid sealed password format')
   }
   if (!secret) {
     throw new Error('Cannot decrypt pending signup password: missing BETTER_AUTH_SECRET')

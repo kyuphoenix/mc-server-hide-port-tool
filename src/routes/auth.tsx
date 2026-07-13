@@ -242,7 +242,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
     if (settings.registration_mode === 'oauth') {
       return c.html(
-        <Layout title="注册"><RegisterView settings={settings} error="仅支持 GitHub 注册" /></Layout>,
+        <Layout title="注册"><RegisterView settings={settings} error="当前仅支持 OAuth 注册" /></Layout>,
         { status: 403 }
       )
     }

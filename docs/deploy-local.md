@@ -33,9 +33,10 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
 - `0002_super_admin_and_limits.sql` — `user` 表加 `super_admin` / `record_limit` 列；`settings` 表加 `max_records_per_user` / `min_subdomain_length`
 - `0003_invite_codes.sql` — 邀请码表
 - `0004_oauth_providers.sql` — 通用 OAuth 应用配置表
-- `0005_oauth_unify_github.sql` — OAuth 增加 `icon_url`；注册模式 `github` 归一为 `oauth`
+- `0005_oauth_unify_github.sql` — 迁移序号占位（icon_url 已在 0004）
 - `0006_schema_hardening.sql` - unique indexes, index cleanup, expiry indexes
 - `0007_passkey.sql` — Passkey 表（个人设置）
+- `0008_numeric_user_ids.sql` — `user_id_counter`：新用户 id 按注册顺序从 1 递增
 
 本地开发用 `--local` 应用同一套迁移。
 

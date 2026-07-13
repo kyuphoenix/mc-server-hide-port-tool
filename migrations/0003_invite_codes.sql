@@ -1,4 +1,4 @@
-﻿-- Migration: 0003_invite_codes
+-- Migration: 0003_invite_codes
 -- 邀请码注册：全局开关 + 邀请码表 + 邮箱验证暂存字段
 
 ALTER TABLE "settings" ADD COLUMN "invite_required" INTEGER NOT NULL DEFAULT 0;

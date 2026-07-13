@@ -149,8 +149,7 @@ export async function updateSettings(
 }
 
 function normalizeMode(m: string): 'email' | 'oauth' | 'both' {
-  // legacy github mode -> oauth
-  if (m === 'github' || m === 'oauth') return 'oauth'
+  if (m === 'oauth') return 'oauth'
   if (m === 'both') return 'both'
   return 'email'
 }

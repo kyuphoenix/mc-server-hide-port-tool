@@ -61,8 +61,6 @@ example1.com:abc123_your_token_here,example2.com:def456_your_token_here
 
 | 来源 | 是否生效 | 备注 |
 |---|---|---|
-| `CLOUDFLARE_DOMAINS_API_TOKEN` 中的域名 | 是，派生为最终 `DOMAINS` | 无论是否设置 `DOMAINS` secret，CI 都以此为准生成 Worker 的 `DOMAINS` 变量 |
-| `DOMAINS` secret | 仅一致性校验 | 若设置，CI 检查其每一条是否都被 `CLOUDFLARE_DOMAINS_API_TOKEN` 覆盖；缺漏只在日志警告，不阻断部署 |
 
 ## 示例：单域名最小配置
 

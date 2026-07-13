@@ -209,15 +209,4 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
     })
   })
 
-  // 兼容旧表单提交
-  app.post('/dns/:id/delete', async (c) => {
-    const session = await getCurrentSession(c.env, c.req.raw.headers)
-    if (!session) return c.redirect('/login')
-    const id = c.req.param('id')
-    const record = await findRecordById(c.env.DB, id)
-    if (!record) return c.redirect('/')
-    if (record.user_id !== session.user.id) return c.redirect('/')
-    await deleteRecordAndCloudflare(c.env, record)
-    return c.redirect('/')
-  })
 }

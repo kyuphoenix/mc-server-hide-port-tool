@@ -104,7 +104,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     const mode = String(form.get('registration_mode') ?? 'email')
     const modeNorm: 'email' | 'oauth' | 'both' =
-      mode === 'oauth' || mode === 'github' ? 'oauth' : mode === 'both' ? 'both' : 'email'
+      mode === 'oauth' ? 'oauth' : mode === 'both' ? 'both' : 'email'
 
     const whitelistSuffixesRaw = String(form.get('email_whitelist_suffixes') ?? '').trim()
     const blacklistSuffixesRaw = String(form.get('email_blacklist_suffixes') ?? '').trim()

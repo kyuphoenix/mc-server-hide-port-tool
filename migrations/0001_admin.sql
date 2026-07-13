@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS "dns_record_host_name_index" ON "dns_record"("host_na
 CREATE TABLE IF NOT EXISTS "settings" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT 'default',
   "registration_enabled" INTEGER NOT NULL DEFAULT 1,
-  "registration_mode" TEXT NOT NULL DEFAULT 'email', -- email | github | both
+  "registration_mode" TEXT NOT NULL DEFAULT 'email', -- email | oauth | both
   "email_whitelist_enabled" INTEGER NOT NULL DEFAULT 0,
   "email_whitelist_suffixes" TEXT NOT NULL DEFAULT '[]',
   "email_blacklist_enabled" INTEGER NOT NULL DEFAULT 0,

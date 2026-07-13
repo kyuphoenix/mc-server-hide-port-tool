@@ -3,6 +3,7 @@
 -- Tables: user, session, account, verification
 
 -- user
+-- id: sequential numeric string assigned by app ("1","2","3"...) via user_id_counter
 CREATE TABLE IF NOT EXISTS "user" (
   "id" TEXT PRIMARY KEY NOT NULL,
   "name" TEXT NOT NULL,

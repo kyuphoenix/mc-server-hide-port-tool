@@ -6,6 +6,7 @@ import {
   toGenericOAuthConfig,
   type OAuthProviderRow
 } from './services/oauth-providers'
+import { allocateNextUserId } from './services/user-ids'
 
 export type AuthBindings = {
   DB: D1Database
@@ -68,6 +69,23 @@ export async function createAuth(
       enabled: true,
       minPasswordLength: 8,
       autoSignIn: true
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => {
+            // Assign sequential numeric user ids: "1", "2", "3", ...
+            // createWithHooks uses forceAllowId, so this id is persisted.
+            const id = await allocateNextUserId(env.DB)
+            return {
+              data: {
+                ...user,
+                id
+              }
+            }
+          }
+        }
+      }
     },
     session: {
       // 设置页添加 Passkey / 解绑账号会走 fresh session 校验；关闭以避免长会话无法操作
