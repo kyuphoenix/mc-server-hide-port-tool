@@ -142,6 +142,12 @@ export const AdminView: FC<{
         {/* Settings Tab */}
         {tab === 'settings' && (
         <section class="bg-slate-900/40 border border-slate-800 rounded-lg p-6 sm:p-8">
+          {(mailError || mailInfo) && (
+            <div id="settings-mail-alert" class={`mb-4 p-3 rounded-lg text-sm border ${mailError ? 'bg-rose-500/10 border-rose-500/20 text-rose-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'}`}>
+              {mailError || mailInfo}
+            </div>
+          )}
+
           <h3 class="text-lg font-bold text-white mb-6 pb-3 border-b border-slate-800">全局与注册配置</h3>
 
           <form method="post" action="/admin/settings" class="space-y-6">
@@ -271,94 +277,51 @@ export const AdminView: FC<{
 
                 {/* Resend Service Panel */}
                 <div class="bg-slate-950 p-5 rounded-md border border-slate-800">
-                  <h4 class="text-sm font-bold text-white uppercase tracking-wider mb-4">邮件服务 (Resend HTTP API)</h4>
-                  
+                  <div class="flex items-start justify-between gap-3 mb-4">
+                    <h4 class="text-sm font-bold text-white uppercase tracking-wider">邮件服务 (Resend HTTP API)</h4>
+                    <button
+                      type="button"
+                      id="mail-test-open"
+                      class="shrink-0 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md transition"
+                    >测试发信</button>
+                  </div>
+
+                  {(mailError || mailInfo) && (
+                    <div class={`mb-4 p-3 rounded-md text-sm border ${mailError ? 'bg-rose-500/10 border-rose-500/20 text-rose-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'}`}>
+                      {mailError || mailInfo}
+                    </div>
+                  )}
+
                   <div class="flex items-center gap-3 mb-4">
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       id="resend_enabled"
-                      name="resend_enabled" 
-                      checked={settings.resend_enabled} 
+                      name="resend_enabled"
+                      checked={settings.resend_enabled}
                       class="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 bg-slate-900 border-slate-700"
                     />
-                    <label for="resend_enabled" class="text-sm font-medium text-slate-200 cursor-pointer">启用邮箱接收验证码注册</label>
+                    <label for="resend_enabled" class="text-sm font-medium text-slate-200 cursor-pointer">???????????</label>
                   </div>
 
                   <div class="space-y-4">
                     <div>
                       <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Resend API Key</label>
-                      <input 
-                        type="password" 
-                        name="resend_api_key" 
-                        placeholder={settings.resend_api_key ? '已配置（留空则不更新）' : 're_xxxxxxxx'} 
+                      <input
+                        type="password"
+                        name="resend_api_key"
+                        placeholder={settings.resend_api_key ? '???????????' : 're_xxxxxxxx'}
                         class="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-md text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
                       />
                     </div>
                     <div>
-                      <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">发件人地址</label>
-                      <input 
-                        type="email" 
-                        name="resend_from" 
-                        value={settings.resend_from ?? ''} 
+                      <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">?????</label>
+                      <input
+                        type="email"
+                        name="resend_from"
+                        value={settings.resend_from ?? ''}
                         placeholder="noreply@yourdomain.com"
                         class="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-md text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
                       />
-                    </div>
-                  </div>
-
-                  {(mailError || mailInfo) && (
-                    <div class={`mt-4 p-3 rounded-md text-sm border ${mailError ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
-                      {mailError || mailInfo}
-                    </div>
-                  )}
-
-                  <div class="mt-5 pt-4 border-t border-slate-800">
-                    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
-                      <div>
-                        <div class="text-sm font-medium text-slate-200">测试发信</div>
-                        <div class="text-xs text-slate-500 mt-1">使用当前已保存的 Resend 配置发送一封测试邮件</div>
-                      </div>
-                      <button
-                        type="button"
-                        id="mail-test-toggle"
-                        class="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md transition"
-                      >
-                        测试发信
-                      </button>
-                    </div>
-
-                    <div id="mail-test-panel" class="hidden rounded-lg border border-slate-800 bg-slate-950/50 p-4">
-                      <form method="post" action="/admin/mail/test" class="space-y-3">
-                        {csrfField}
-                        <div>
-                          <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" for="mail-test-to">
-                            接收邮箱
-                          </label>
-                          <input
-                            id="mail-test-to"
-                            type="email"
-                            name="to_email"
-                            required
-                            placeholder="you@example.com"
-                            class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
-                          />
-                        </div>
-                        <div class="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            id="mail-test-cancel"
-                            class="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-md transition"
-                          >
-                            取消
-                          </button>
-                          <button
-                            type="submit"
-                            class="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-md transition"
-                          >
-                            发送
-                          </button>
-                        </div>
-                      </form>
                     </div>
                   </div>
                 </div>
@@ -929,25 +892,72 @@ export const AdminView: FC<{
         </section>
         )}
 
+      <div id="mail-test-modal" class="hidden fixed inset-0 z-50">
+        <div id="mail-test-backdrop" class="absolute inset-0 bg-black/70 backdrop-blur-[2px]"></div>
+        <div class="relative z-10 min-h-full flex items-center justify-center p-4">
+          <div class="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl shadow-black/50">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+              <div>
+                <div class="text-base font-bold text-white">测试发信</div>
+                <div class="text-xs text-slate-500 mt-1">使用当前已保存的 Resend 配置发送测试邮件</div>
+              </div>
+              <button type="button" id="mail-test-close" class="px-2 py-1 text-slate-400 hover:text-white transition">?</button>
+            </div>
+            <form method="post" action="/admin/mail/test" class="px-5 py-4 space-y-4">
+              {csrfField}
+              <div>
+                <label for="mail-test-to" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">接收邮箱</label>
+                <input
+                  id="mail-test-to"
+                  type="email"
+                  name="to_email"
+                  required
+                  placeholder="you@example.com"
+                  class="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
+                />
+              </div>
+              <div class="flex justify-end gap-2 pt-1">
+                <button type="button" id="mail-test-cancel" class="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition">取消</button>
+                <button type="submit" class="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition">发送</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
       <script>{raw(`
         (function () {
-          var toggle = document.getElementById('mail-test-toggle');
-          var panel = document.getElementById('mail-test-panel');
-          var cancel = document.getElementById('mail-test-cancel');
+          var openBtn = document.getElementById('mail-test-open');
+          var modal = document.getElementById('mail-test-modal');
+          var backdrop = document.getElementById('mail-test-backdrop');
+          var closeBtn = document.getElementById('mail-test-close');
+          var cancelBtn = document.getElementById('mail-test-cancel');
           var input = document.getElementById('mail-test-to');
-          if (!toggle || !panel) return;
-          function openPanel() {
-            panel.classList.remove('hidden');
-            if (input) input.focus();
+          if (!openBtn || !modal) return;
+
+          function openModal() {
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+            if (input) {
+              setTimeout(function () { input.focus(); }, 0);
+            }
           }
-          function closePanel() {
-            panel.classList.add('hidden');
+          function closeModal() {
+            modal.classList.add('hidden');
+            document.body.style.overflow = '';
           }
-          toggle.addEventListener('click', function () {
-            if (panel.classList.contains('hidden')) openPanel();
-            else closePanel();
+
+          openBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openModal();
           });
-          if (cancel) cancel.addEventListener('click', closePanel);
+          if (backdrop) backdrop.addEventListener('click', closeModal);
+          if (closeBtn) closeBtn.addEventListener('click', closeModal);
+          if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+          document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+          });
         })();
       `)}</script>
 

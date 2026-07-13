@@ -120,12 +120,17 @@ export async function sendResendEmail(
     toEmail: string
     subject: string
     html: string
+    /** When true, allow sending even if resend_enabled is off (admin test). */
+    ignoreEnabledFlag?: boolean
   }
 ): Promise<{ ok: boolean; message?: string }> {
   const settings = await getSettings(env.DB)
 
-  if (!settings.resend_enabled || !settings.resend_api_key || !settings.resend_from) {
-    return { ok: false, message: '后端未配置 Resend，无法发送邮件' }
+  if (!settings.resend_api_key || !settings.resend_from) {
+    return { ok: false, message: '后端未配置 Resend API Key 或发件人地址' }
+  }
+  if (!input.ignoreEnabledFlag && !settings.resend_enabled) {
+    return { ok: false, message: '请先启用邮件服务（Resend）' }
   }
 
   const toEmail = String(input.toEmail || '').trim()
@@ -198,5 +203,6 @@ export async function sendTestEmail(
     metaLines: [`发送时间：${now}`, `接收邮箱：${toEmail}`],
     footerNote: '若未收到此邮件，请检查垃圾箱、发件域名配置以及 Resend API Key。'
   })
-  return await sendResendEmail(env, { toEmail, subject, html })
+  // Admin test should work as long as credentials exist, even if open registration mail is disabled.
+  return await sendResendEmail(env, { toEmail, subject, html, ignoreEnabledFlag: true })
 }

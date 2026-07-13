@@ -376,25 +376,32 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!admin) return c.redirect('/')
     const form = await c.req.formData()
     const csrfDenied = await requireMutationCsrf(c, form)
-    if (csrfDenied) return csrfDenied
+    if (csrfDenied) {
+      return c.redirect(adminPath('settings', { mail_error: '安全校验失败，请刷新页面后重试' }))
+    }
 
     const toEmail = String(form.get('to_email') ?? '').trim()
     if (!toEmail || !toEmail.includes('@')) {
-      return c.redirect(adminPath('settings', { mail_error: '\u8bf7\u8f93\u5165\u6709\u6548\u7684\u63a5\u6536\u90ae\u7bb1' }))
+      return c.redirect(adminPath('settings', { mail_error: '请输入有效的接收邮箱' }))
     }
 
-    const result = await sendTestEmail(c.env, toEmail)
-    if (!result.ok) {
+    try {
+      const result = await sendTestEmail(c.env, toEmail)
+      if (!result.ok) {
+        return c.redirect(
+          adminPath('settings', {
+            mail_error: result.message || '测试邮件发送失败'
+          })
+        )
+      }
       return c.redirect(
         adminPath('settings', {
-          mail_error: result.message || '\u6d4b\u8bd5\u90ae\u4ef6\u53d1\u9001\u5931\u8d25'
+          mail_info: `测试邮件已提交发送：${toEmail}`
         })
       )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '测试邮件发送失败'
+      return c.redirect(adminPath('settings', { mail_error: msg }))
     }
-    return c.redirect(
-      adminPath('settings', {
-        mail_info: `\u6d4b\u8bd5\u90ae\u4ef6\u5df2\u53d1\u9001\u81f3 ${toEmail}`
-      })
-    )
   })
 }
