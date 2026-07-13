@@ -52,19 +52,21 @@ export const SettingsView: FC<{
             </div>
             <span class="font-bold text-white tracking-wide">个人设置</span>
           </div>
-          <div class="flex items-center gap-6 text-sm">
-            <a href="/" class="text-slate-300 hover:text-white transition flex items-center gap-1.5 font-medium">
+          <div class="flex items-center gap-4 sm:gap-6 text-sm whitespace-nowrap">
+            <a href="/" class="inline-flex items-center text-slate-300 hover:text-white transition font-medium">
               返回主页
             </a>
             {role === 'admin' && (
-              <a href="/admin" class="text-slate-300 hover:text-white transition flex items-center gap-1.5 font-medium">
+              <a href="/admin" class="inline-flex items-center text-slate-300 hover:text-white transition font-medium">
                 管理后台
               </a>
             )}
-            <form method="post" action="/logout" class="inline">
-                <input type="hidden" name="csrf_token" value={csrfToken} />
-                <button type="submit" class="text-rose-400 hover:text-rose-300 transition font-medium">退出登录</button>
-              </form>
+            <form method="post" action="/logout" class="inline-flex items-center m-0">
+              <input type="hidden" name="csrf_token" value={csrfToken} />
+              <button type="submit" class="inline-flex items-center text-rose-400 hover:text-rose-300 transition font-medium leading-none">
+                退出登录
+              </button>
+            </form>
           </div>
         </div>
       </header>

@@ -21,7 +21,7 @@ export const IndexView: FC<{ name: string; email: string; role: string; records:
             <span class="font-bold text-white tracking-wide hidden sm:inline-block">Minecraft 端口隐藏工具</span>
           </div>
           
-          <div class="relative text-sm" id="user-menu">
+                    <div class="relative text-sm" id="user-menu">
             <button
               type="button"
               id="user-menu-toggle"
@@ -33,7 +33,7 @@ export const IndexView: FC<{ name: string; email: string; role: string; records:
               <span class="max-w-[10rem] sm:max-w-[14rem] truncate font-medium">{displayName}</span>
               {role === 'admin' && (
                 <span class="hidden sm:inline-flex px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  ???
+                  管理员
                 </span>
               )}
               <svg
@@ -54,7 +54,7 @@ export const IndexView: FC<{ name: string; email: string; role: string; records:
               role="menu"
             >
               <div class="px-3 py-2 border-b border-slate-800">
-                <div class="text-xs text-slate-500">????</div>
+                <div class="text-xs text-slate-500">当前账号</div>
                 <div class="text-sm text-slate-200 truncate" title={displayName}>{displayName}</div>
               </div>
               <a
@@ -66,7 +66,7 @@ export const IndexView: FC<{ name: string; email: string; role: string; records:
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A9 9 0 1118.88 6.196 9 9 0 015.12 17.804z" />
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                ????
+                个人设置
               </a>
               {role === 'admin' && (
                 <a
@@ -78,7 +78,7 @@ export const IndexView: FC<{ name: string; email: string; role: string; records:
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
-                  ????
+                  管理后台
                 </a>
               )}
               <form method="post" action="/logout" class="border-t border-slate-800">
@@ -88,7 +88,7 @@ export const IndexView: FC<{ name: string; email: string; role: string; records:
                   class="w-full flex items-center gap-2 px-3 py-2.5 text-left text-rose-400 hover:bg-rose-950/40 hover:text-rose-300 transition"
                   role="menuitem"
                 >
-                  ????
+                  退出登录
                 </button>
               </form>
             </div>
