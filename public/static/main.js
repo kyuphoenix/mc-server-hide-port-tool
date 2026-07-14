@@ -21,16 +21,6 @@ function csrfHeaders(extra = {}) {
   };
 }
 
-const button = document.getElementById('btn');
-const cancelEditBtn = document.getElementById('cancel-edit-btn');
-const rootDomainSelect = document.getElementById('root-domain');
-const subdomainInput = document.getElementById('subdomain');
-const serverAddressInput = document.getElementById('server-address');
-const portInput = document.getElementById('port');
-const editingIdInput = document.getElementById('editing-id');
-const editingBanner = document.getElementById('editing-banner');
-const formTitle = document.getElementById('form-title');
-
 /** @type {{ minSubdomainLength: number, recordLimit: number|null }} */
 let domainMeta = {
   minSubdomainLength: 0,
@@ -40,26 +30,62 @@ let domainMeta = {
 /** @type {string|null} */
 let editingId = null;
 
-document.addEventListener('DOMContentLoaded', () => {
+function el(id) {
+  return document.getElementById(id);
+}
+
+function getButton() { return el('btn'); }
+function getCancelEditBtn() { return el('cancel-edit-btn'); }
+function getRootDomainSelect() { return el('root-domain'); }
+function getSubdomainInput() { return el('subdomain'); }
+function getServerAddressInput() { return el('server-address'); }
+function getPortInput() { return el('port'); }
+function getEditingIdInput() { return el('editing-id'); }
+function getEditingBanner() { return el('editing-banner'); }
+function getFormTitle() { return el('form-title'); }
+
+function initHomeDns() {
+  const button = getButton();
+  const rootDomainSelect = getRootDomainSelect();
+  if (!button || !rootDomainSelect) return;
+
   loadDomains();
-  const tbody = document.getElementById('records-tbody');
-  if (tbody) {
+
+  const tbody = el('records-tbody');
+  if (tbody && !tbody.dataset.bound) {
+    tbody.dataset.bound = '1';
     tbody.addEventListener('click', onRecordsClick);
   }
-  if (cancelEditBtn) {
+
+  const cancelEditBtn = getCancelEditBtn();
+  if (cancelEditBtn && !cancelEditBtn.dataset.bound) {
+    cancelEditBtn.dataset.bound = '1';
     cancelEditBtn.addEventListener('click', () => clearEditMode());
   }
+
+  if (!button.dataset.bound) {
+    button.dataset.bound = '1';
+    button.addEventListener('click', submitDnsForm);
+  }
+
   initUserMenu();
+}
+
+window.__homeDnsInit = initHomeDns;
+document.addEventListener('home:ready', initHomeDns);
+document.addEventListener('DOMContentLoaded', () => {
+  if (el('btn') && el('root-domain')) initHomeDns();
 });
-button.addEventListener('click', submitDnsForm);
 
 
 function initUserMenu() {
-  const root = document.getElementById('user-menu');
-  const toggle = document.getElementById('user-menu-toggle');
-  const panel = document.getElementById('user-menu-panel');
-  const chevron = document.getElementById('user-menu-chevron');
+  const root = el('user-menu');
+  const toggle = el('user-menu-toggle');
+  const panel = el('user-menu-panel');
+  const chevron = el('user-menu-chevron');
   if (!root || !toggle || !panel) return;
+  if (toggle.dataset.bound) return;
+  toggle.dataset.bound = '1';
 
   const setOpen = (open) => {
     if (open) {
@@ -93,6 +119,9 @@ function initUserMenu() {
 }
 
 async function loadDomains() {
+  const rootDomainSelect = getRootDomainSelect();
+  const button = getButton();
+  if (!rootDomainSelect || !button) return;
   setButtonEnabled(false);
   rootDomainSelect.innerHTML = '<option value="">加载中...</option>';
 
@@ -308,6 +337,15 @@ function showToast(message, type = 'success') {
 
 function setEditMode(record) {
   editingId = record.id;
+  const editingIdInput = getEditingIdInput();
+  const editingBanner = getEditingBanner();
+  const cancelEditBtn = getCancelEditBtn();
+  const formTitle = getFormTitle();
+  const subdomainInput = getSubdomainInput();
+  const rootDomainSelect = getRootDomainSelect();
+  const serverAddressInput = getServerAddressInput();
+  const portInput = getPortInput();
+  const button = getButton();
   if (editingIdInput) editingIdInput.value = record.id;
   if (editingBanner) editingBanner.classList.remove('hidden');
   if (cancelEditBtn) cancelEditBtn.classList.remove('hidden');
@@ -331,6 +369,13 @@ function setEditMode(record) {
 
 function clearEditMode() {
   editingId = null;
+  const editingIdInput = getEditingIdInput();
+  const editingBanner = getEditingBanner();
+  const cancelEditBtn = getCancelEditBtn();
+  const formTitle = getFormTitle();
+  const subdomainInput = getSubdomainInput();
+  const rootDomainSelect = getRootDomainSelect();
+  const button = getButton();
   if (editingIdInput) editingIdInput.value = '';
   if (editingBanner) editingBanner.classList.add('hidden');
   if (cancelEditBtn) cancelEditBtn.classList.add('hidden');
@@ -386,6 +431,8 @@ async function onRecordsClick(event) {
     removeRecord(id);
     if (editingId === id) {
       clearEditMode();
+      const subdomainInput = getSubdomainInput();
+      const serverAddressInput = getServerAddressInput();
       if (subdomainInput) subdomainInput.value = '';
       if (serverAddressInput) serverAddressInput.value = '';
     }
@@ -419,6 +466,12 @@ async function submitDnsForm() {
 }
 
 async function createDnsRecords() {
+  const subdomainInput = getSubdomainInput();
+  const rootDomainSelect = getRootDomainSelect();
+  const serverAddressInput = getServerAddressInput();
+  const portInput = getPortInput();
+  const button = getButton();
+  if (!subdomainInput || !rootDomainSelect || !serverAddressInput || !portInput || !button) return;
   const subdomain = subdomainInput.value.trim();
   const rootDomain = rootDomainSelect.value;
   const serverAddress = serverAddressInput.value.trim();
@@ -478,6 +531,11 @@ async function createDnsRecords() {
 }
 
 async function updateDnsRecord(id) {
+  const serverAddressInput = getServerAddressInput();
+  const portInput = getPortInput();
+  const button = getButton();
+  const rootDomainSelect = getRootDomainSelect();
+  if (!serverAddressInput || !portInput || !button) return;
   const serverAddress = serverAddressInput.value.trim();
   const port = portInput.value.trim();
   if (!serverAddress || !port) {
@@ -520,6 +578,8 @@ async function updateDnsRecord(id) {
 }
 
 function setButtonEnabled(enabled) {
+  const button = getButton();
+  if (!button) return;
   button.disabled = !enabled;
   button.style.opacity = enabled ? '1' : '0.6';
   button.style.cursor = enabled ? 'pointer' : 'not-allowed';
