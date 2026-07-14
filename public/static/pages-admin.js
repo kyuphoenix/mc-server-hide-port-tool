@@ -476,37 +476,82 @@ function renderAll() {
   bindEvents();
 }
 
+function setAdminSidebarOpen(open) {
+  const toggle = document.getElementById('admin-sidebar-toggle');
+  const panel = document.getElementById('admin-sidebar-panel');
+  const iconOpen = document.getElementById('admin-sidebar-icon-open');
+  const iconClose = document.getElementById('admin-sidebar-icon-close');
+  if (!toggle || !panel) return;
+  if (open) {
+    panel.classList.remove('hidden');
+    panel.classList.add('flex');
+  } else {
+    panel.classList.add('hidden');
+    panel.classList.remove('flex');
+  }
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (iconOpen) iconOpen.classList.toggle('hidden', open);
+  if (iconClose) iconClose.classList.toggle('hidden', !open);
+}
+
 function bindSidebar() {
   bindLogoutButtons();
   document.querySelectorAll('[data-tab-link]').forEach((a) => {
     a.addEventListener('click', async (e) => {
       e.preventDefault();
       const tab = a.getAttribute('data-tab-link');
+      // collapse mobile menu after choosing a tab
+      setAdminSidebarOpen(false);
       setTab(tab);
       await loadAdmin(tab);
     });
   });
+
   const toggle = document.getElementById('admin-sidebar-toggle');
   const panel = document.getElementById('admin-sidebar-panel');
-  const iconOpen = document.getElementById('admin-sidebar-icon-open');
-  const iconClose = document.getElementById('admin-sidebar-icon-close');
-  if (toggle && panel) {
-    const setOpen = (open) => {
-      if (open) { panel.classList.remove('hidden'); panel.classList.add('flex'); }
-      else { panel.classList.add('hidden'); panel.classList.remove('flex'); }
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (iconOpen) iconOpen.classList.toggle('hidden', open);
-      if (iconClose) iconClose.classList.toggle('hidden', !open);
-    };
-    setOpen(false);
-    toggle.addEventListener('click', () => setOpen(toggle.getAttribute('aria-expanded') !== 'true'));
+  if (!toggle || !panel) return;
+
+  // Always rebind on re-render; guard only against double-binding the same node.
+  if (toggle.dataset.bound !== '1') {
+    toggle.dataset.bound = '1';
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const open = toggle.getAttribute('aria-expanded') === 'true';
+      setAdminSidebarOpen(!open);
+    });
+  }
+
+  // Mobile default collapsed; desktop relies on md:flex.
+  if (!window.matchMedia('(min-width: 768px)').matches) {
+    setAdminSidebarOpen(false);
+  } else {
+    panel.classList.remove('hidden');
+    panel.classList.add('flex');
+    toggle.setAttribute('aria-expanded', 'false');
+    const iconOpen = document.getElementById('admin-sidebar-icon-open');
+    const iconClose = document.getElementById('admin-sidebar-icon-close');
+    if (iconOpen) iconOpen.classList.remove('hidden');
+    if (iconClose) iconClose.classList.add('hidden');
+  }
+
+  if (!window.__adminSidebarResizeBound) {
+    window.__adminSidebarResizeBound = true;
     window.addEventListener('resize', () => {
+      const tgl = document.getElementById('admin-sidebar-toggle');
+      const pnl = document.getElementById('admin-sidebar-panel');
+      if (!tgl || !pnl) return;
       if (window.matchMedia('(min-width: 768px)').matches) {
-        panel.classList.remove('hidden'); panel.classList.add('flex');
-        toggle.setAttribute('aria-expanded', 'false');
+        pnl.classList.remove('hidden');
+        pnl.classList.add('flex');
+        tgl.setAttribute('aria-expanded', 'false');
+        const iconOpen = document.getElementById('admin-sidebar-icon-open');
+        const iconClose = document.getElementById('admin-sidebar-icon-close');
         if (iconOpen) iconOpen.classList.remove('hidden');
         if (iconClose) iconClose.classList.add('hidden');
-      } else if (toggle.getAttribute('aria-expanded') !== 'true') setOpen(false);
+      } else if (tgl.getAttribute('aria-expanded') !== 'true') {
+        setAdminSidebarOpen(false);
+      }
     });
   }
 }
