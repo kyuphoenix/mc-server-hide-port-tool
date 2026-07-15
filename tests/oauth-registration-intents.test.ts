@@ -638,6 +638,111 @@ describe('OAuth registration intent lifecycle', () => {
     expect(inviteRow?.reserved_intent_id).toBeNull()
   })
 
+  it('keeps a stale authorized reservation when a user appears before conditional release', async () => {
+    const db = await database()
+    await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
+    const creatorId = await seedUser(db)
+    const invite = await seedInvite(db, creatorId, {
+      id: 'authorized-race-invite',
+      code: 'AUTHORIZED-RACE'
+    })
+    const now = 25_000_000
+    const userId = '9651'
+    const intent = await createBoundIntent(db, {
+      inviteRequired: true,
+      inviteCode: invite.code,
+      state: 'authorized-race',
+      now
+    })
+    await authorizeOAuthRegistrationIntent(db, {
+      token: intent.token,
+      providerId: intent.providerId,
+      state: intent.state,
+      userId,
+      now
+    })
+    const quarantineCutoff = now + 1
+
+    const selectedBeforeUserInsert = await db.prepare(
+      `SELECT id, invite_code_id FROM oauth_registration_intent
+       WHERE authorized_at IS NOT NULL
+         AND authorized_at <= ?
+         AND consumed_at IS NULL
+         AND authorized_user_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM user
+           WHERE user.id = oauth_registration_intent.authorized_user_id
+         )`
+    ).bind(quarantineCutoff).first<{ id: string; invite_code_id: string | null }>()
+    expect(selectedBeforeUserInsert).toEqual({ id: intent.id, invite_code_id: invite.id })
+
+    await seedUser(db, { id: userId, email: 'authorized-race-user@example.test' })
+
+    await db.batch([
+      db.prepare(
+        `UPDATE invite_code
+         SET reserved_intent_id = NULL, reserved_at = NULL
+         WHERE id = ?
+           AND used_by IS NULL
+           AND reserved_intent_id = ?
+           AND EXISTS (
+             SELECT 1 FROM oauth_registration_intent
+             WHERE oauth_registration_intent.id = ?
+               AND oauth_registration_intent.authorized_at IS NOT NULL
+               AND oauth_registration_intent.authorized_at <= ?
+               AND oauth_registration_intent.consumed_at IS NULL
+               AND oauth_registration_intent.authorized_user_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM user
+                 WHERE user.id = oauth_registration_intent.authorized_user_id
+               )
+           )`
+      ).bind(invite.id, intent.id, intent.id, quarantineCutoff),
+      db.prepare(
+        `DELETE FROM oauth_registration_intent
+         WHERE id = ?
+           AND authorized_at IS NOT NULL
+           AND authorized_at <= ?
+           AND consumed_at IS NULL
+           AND authorized_user_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM user
+             WHERE user.id = oauth_registration_intent.authorized_user_id
+           )
+           AND (
+             invite_code_id IS NULL OR NOT EXISTS (
+               SELECT 1 FROM invite_code
+               WHERE invite_code.id = oauth_registration_intent.invite_code_id
+                 AND invite_code.reserved_intent_id = oauth_registration_intent.id
+             )
+           )`
+      ).bind(intent.id, quarantineCutoff)
+    ])
+
+    expect(await db.prepare(
+      'SELECT consumed_at FROM oauth_registration_intent WHERE id = ?'
+    ).bind(intent.id).first<{ consumed_at: number | null }>()).toEqual({ consumed_at: null })
+    expect(await db.prepare(
+      'SELECT reserved_intent_id, used_by FROM invite_code WHERE id = ?'
+    ).bind(invite.id).first<{ reserved_intent_id: string | null; used_by: string | null }>())
+      .toEqual({ reserved_intent_id: intent.id, used_by: null })
+
+    await cleanupOAuthRegistrationIntents(
+      db,
+      now + OAUTH_REGISTRATION_AUTHORIZED_QUARANTINE_MS + 2
+    )
+
+    expect(await db.prepare(
+      'SELECT consumed_at FROM oauth_registration_intent WHERE id = ?'
+    ).bind(intent.id).first<{ consumed_at: number | null }>()).toEqual({
+      consumed_at: expect.any(Number)
+    })
+    expect(await db.prepare(
+      'SELECT reserved_intent_id, used_by FROM invite_code WHERE id = ?'
+    ).bind(invite.id).first<{ reserved_intent_id: string | null; used_by: string | null }>())
+      .toEqual({ reserved_intent_id: null, used_by: userId })
+  })
+
   it('deletes old consumed intents without changing invite ownership', async () => {
     const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })

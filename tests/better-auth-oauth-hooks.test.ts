@@ -185,6 +185,22 @@ describe('Better Auth OAuth registration hooks', () => {
     mockOAuthProviderFetch()
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId)
+    await db.prepare(
+      `CREATE TRIGGER assert_oauth_intent_consumed_before_session
+       BEFORE INSERT ON session
+       WHEN EXISTS (
+         SELECT 1 FROM oauth_registration_intent
+         WHERE authorized_user_id = NEW.userId
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM oauth_registration_intent
+         WHERE authorized_user_id = NEW.userId
+           AND consumed_at IS NOT NULL
+       )
+       BEGIN
+         SELECT RAISE(ABORT, 'oauth_intent_not_consumed_before_session');
+       END`
+    ).run()
 
     const { response, intent } = await completeRegistration(auth, db, {
       inviteRequired: true,

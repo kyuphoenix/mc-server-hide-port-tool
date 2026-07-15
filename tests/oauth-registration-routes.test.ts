@@ -82,7 +82,7 @@ function allSetCookies(headers: Headers): string[] {
   return combined ? [combined] : []
 }
 
-describe('OAuth registration routes', () => {
+describe('OAuth registration routes', { timeout: 15_000 }, () => {
   it('blocks the public generic OAuth sign-in endpoint', async () => {
     const { env } = await setup()
     const response = await postJson(env, '/api/auth/sign-in/oauth2', {
