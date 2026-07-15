@@ -48,6 +48,15 @@ export async function createTestD1(options: MigrationOptions = {}): Promise<Test
   return { db, dispose: async () => mf.dispose() }
 }
 
+export async function markFirstSetupCompleted(db: D1Database): Promise<void> {
+  await db.prepare(
+    `UPDATE first_setup
+     SET status = 'completed', claim_token_hash = NULL, claimed_at = NULL,
+         claimed_user_id = NULL, completed_at = ?
+     WHERE id = 1 AND status <> 'completed'`
+  ).bind(Date.now()).run()
+}
+
 export async function seedUser(
   db: D1Database,
   input: { id?: string; email?: string; name?: string } = {}

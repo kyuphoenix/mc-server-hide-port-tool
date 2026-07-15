@@ -1,7 +1,12 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { applyMigrationFile, createTestD1, type TestD1 } from './helpers/d1'
+import {
+  applyMigrationFile,
+  createTestD1,
+  markFirstSetupCompleted,
+  type TestD1
+} from './helpers/d1'
 
 const instances: TestD1[] = []
 
@@ -158,6 +163,18 @@ describe('first setup migration', () => {
     })
     expect((await instance.db.prepare('SELECT status FROM first_setup WHERE id=1').first())?.status)
       .toBe('claimed')
+  })
+
+  it('marks an open fixture as completed only when explicitly requested', async () => {
+    const instance = await createTestD1()
+    instances.push(instance)
+    await markFirstSetupCompleted(instance.db)
+    const state = await instance.db.prepare(
+      'SELECT status, claim_token_hash, completed_at FROM first_setup WHERE id = 1'
+    ).first<{ status: string; claim_token_hash: string | null; completed_at: number }>()
+    expect(state?.status).toBe('completed')
+    expect(state?.claim_token_hash).toBeNull()
+    expect(Number(state?.completed_at)).toBeGreaterThan(0)
   })
 
   it('contains no destructive schema statements', async () => {

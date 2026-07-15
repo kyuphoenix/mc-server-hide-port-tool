@@ -4,7 +4,13 @@ import {
   bindOAuthRegistrationIntentState,
   createOAuthRegistrationIntent
 } from '../src/services/oauth-registration-intents'
-import { createTestD1, seedInvite, seedUser, type TestD1 } from './helpers/d1'
+import {
+  createTestD1,
+  markFirstSetupCompleted,
+  seedInvite,
+  seedUser,
+  type TestD1
+} from './helpers/d1'
 import {
   AUTH_ORIGIN,
   cookiesFromHeaders,
