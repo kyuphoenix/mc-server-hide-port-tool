@@ -4,7 +4,7 @@
 
 ## 主要特性
 
-- **首次启动自动 onboarding**：检测到无用户时强制跳转 `/setup` 创建首个管理员并直接登录；首个用户自动标记为超级管理员（不可被其他管理员降级或删除）
+- **首次启动安全 onboarding**：由 D1 `first_setup` 单例状态机原子认领首次管理员初始化；首个 credential 用户在插入时即为超级管理员，并支持中断恢复
 - **多角色权限**：普通用户可创建/删除自己的 DNS 记录；管理员可访问后台管理用户、记录与全局设置；管理员可在后台手动创建用户
 - **可配置注册流程**：后台可开关注册，模式为 `email` / `oauth` / `both`
 - **邀请码注册（可选）**：开启后邮箱与 OAuth 注册都需要邀请码；仅管理员/超级管理员可生成
@@ -116,6 +116,9 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
 - `0006_schema_hardening.sql` — 唯一索引、冗余索引清理、过期字段索引
 - `0007_passkey.sql` — Passkey 表（个人设置绑定 WebAuthn）
 - `0008_numeric_user_ids.sql` — `user_id_counter`：新用户 id 按注册顺序从 1 递增
+- `0009_rate_limit_and_passkey_unique.sql` — 验证限流桶与 Passkey credential 唯一约束
+- `0010_oauth_registration_intents.sql` — OAuth 注册 intent、state 绑定、邀请保留与消费状态
+- `0011_first_setup_claim.sql` — 首次管理员初始化单例状态机、原子认领与 credential 完成触发器
 
 4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
 
@@ -139,8 +142,8 @@ pnpm wrangler dev
 
 访问 `http://localhost:8787`：
 
-- **首次启动**（无用户）跳转 `/setup` 创建管理员
-- **之后未登录**跳转 `/login`；登录后普通用户管理自己的 DNS，管理员可进 `/admin`
+- **首次部署且 `first_setup` 未完成**时统一跳转 `/setup` 创建管理员
+- **初始化完成后未登录**跳转 `/login`；登录后普通用户管理自己的 DNS，管理员可进 `/admin`
 
 ## 项目结构
 
@@ -191,6 +194,9 @@ migrations/
   0006_schema_hardening.sql
   0007_passkey.sql
   0008_numeric_user_ids.sql
+  0009_rate_limit_and_passkey_unique.sql
+  0010_oauth_registration_intents.sql
+  0011_first_setup_claim.sql
 ```
 
 ## 权限与限制摘要
@@ -201,3 +207,12 @@ migrations/
 - OAuth 应用保存在 D1 表 `oauth_provider`，运行时注入 better-auth `genericOAuth`
 - `dns_record.host_name` 与 `account(providerId, accountId)` 有唯一约束，避免重复绑定
 - 邮箱验证流程中的待注册密码不会明文落库（使用 `BETTER_AUTH_SECRET` 密封）
+
+## 首次管理员初始化与隐私保护
+
+- 首次部署由 D1 `first_setup` 单例状态机开放一次管理员初始化，不再通过用户数量决定 `/setup` 是否可用。
+- 初始化请求先原子认领；首个用户插入时已经是 `role=admin`、`super_admin=1`，对应的 credential 创建后由 D1 触发器将状态永久标记为 `completed`。
+- 若 Worker 在 user 与 credential 之间中断，当前请求会立即执行补偿清理；无法立即补偿时进入 10 分钟隔离，超时后仅在确认不存在 credential 时删除孤儿用户并重新开放初始化。
+- 初始化完成前，普通邮箱注册、邮箱验证完成和 OAuth 新用户创建全部关闭；Better Auth 用户创建 Hook 继续作为所有现有及未来入口的最终门禁。
+- claim token 只存在于单次 Worker 请求内存中，D1 仅保存其 SHA-256 哈希，不保存明文 token。
+- 初始化错误使用 `first_setup_security` 安全事件，字段仅限 `event`、`code`、`stage`、`timestamp`；不记录姓名、邮箱、密码、token/hash、请求体、Cookie、IP、User-Agent、原始异常或堆栈。
