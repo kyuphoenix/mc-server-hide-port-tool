@@ -1,17 +1,11 @@
-import type { Hono } from 'hono'
+import type { Context, Hono } from 'hono'
 import { hashPassword } from 'better-auth/crypto'
 import {
   createAuth,
   getCurrentUser
 } from '../auth'
 import { getSettings, isEmailAllowed } from '../services/settings'
-import {
-  countUsers,
-  deleteUserCascade,
-  listAllUsers,
-  setSuperAdmin,
-  setUserRole
-} from '../services/dns-records'
+import { deleteUserCascade } from '../services/dns-records'
 import {
   clearVerificationFailures,
   deleteEmailVerificationsByEmail,
@@ -51,6 +45,14 @@ import {
 import { requestIsHttps, safeInternalPath } from '../lib/security'
 import { requireMutationCsrf } from '../lib/csrf'
 import {
+  claimFirstSetup,
+  createFirstSetupSecurityEvent,
+  FirstSetupError,
+  reconcileFirstSetup,
+  releaseOwnedFirstSetupClaim,
+  type FirstSetupStage
+} from '../services/first-setup'
+import {
   apiErr,
   apiOk,
   apiOkWithHeaders,
@@ -61,6 +63,26 @@ import {
 
 function logOAuthRegistrationFailure(error: unknown, providerId: string): void {
   console.error(JSON.stringify(createOAuthRegistrationSecurityEvent(error, { providerId })))
+}
+
+type AuthRouteContext = Context<{ Bindings: Bindings }>
+
+function logFirstSetupFailure(error: unknown, stage: FirstSetupStage): void {
+  console.error(JSON.stringify(createFirstSetupSecurityEvent(error, { stage })))
+}
+
+function firstSetupErrorResponse(c: AuthRouteContext, error: unknown): Response {
+  const code = error instanceof FirstSetupError ? error.code : 'SETUP_FAILED'
+  if (code === 'SETUP_DONE') {
+    return apiErr(c, '已完成初始化', 400, { code })
+  }
+  if (code === 'SETUP_IN_PROGRESS') {
+    return apiErr(c, '初始化正在进行，请稍后重试', 409, { code })
+  }
+  if (code === 'SETUP_NOT_READY') {
+    return apiErr(c, '请先完成管理员初始化', 409, { code })
+  }
+  return apiErr(c, '创建管理员失败', 500, { code: 'SETUP_FAILED' })
 }
 
 async function cleanupOAuthRegistrationRouteState(
@@ -105,8 +127,6 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/api/auth/setup', async (c) => {
     const denied = await requireJsonMutation(c)
     if (denied) return denied
-    const userCount = await countUsers(c.env.DB)
-    if (userCount > 0) return apiErr(c, "已完成初始化", 400, { code: 'SETUP_DONE' })
 
     const body = await readJsonBody(c)
     const name = String(body.name ?? '').trim()
@@ -114,47 +134,59 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const password = String(body.password ?? '')
     const confirm = String(body.confirm ?? '')
 
-    if (!name || !email || !password) return apiErr(c, "请填写完整")
-    if (password !== confirm) return apiErr(c, "两次密码不一致")
-    if (password.length < 8) return apiErr(c, "密码至少 8 位")
+    if (!name || !email || !password) return apiErr(c, '请填写完整信息')
+    if (password !== confirm) return apiErr(c, '两次密码不一致')
+    if (password.length < 8) return apiErr(c, '密码至少 8 位')
 
-    const auth = await createAuth(c.env)
+    let claim: Awaited<ReturnType<typeof claimFirstSetup>> | null = null
+    let stage: FirstSetupStage = 'reconcile'
     try {
+      await reconcileFirstSetup(c.env.DB)
+      stage = 'claim'
+      claim = await claimFirstSetup(c.env.DB)
+      stage = 'create-user'
+      const auth = await createAuth(c.env, undefined, {
+        firstSetupClaimToken: claim.token
+      })
       const signUpRes = await auth.api.signUpEmail({
         body: { name, email, password },
         headers: c.req.raw.headers,
         asResponse: true
       })
       if (!signUpRes.ok) {
-        const data = await signUpRes.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "创建管理员失败"
-        return apiErr(c, msg, signUpRes.status)
+        throw new FirstSetupError('SETUP_FAILED')
       }
-
-      const listRes = await listAllUsers(c.env.DB)
-      const newUser = listRes.find((u) => u.email === email)
-      const firstUser = listRes[0]
-      if (newUser && firstUser && newUser.id === firstUser.id) {
-        await setUserRole(c.env.DB, newUser.id, 'admin')
-        await setSuperAdmin(c.env.DB, newUser.id, true)
-      } else if (newUser) {
-        await setUserRole(c.env.DB, newUser.id, 'user')
-        await setSuperAdmin(c.env.DB, newUser.id, false)
+    } catch (error) {
+      logFirstSetupFailure(error, stage)
+      if (claim) {
+        await releaseOwnedFirstSetupClaim(c.env.DB, claim.token).catch((releaseError) => {
+          logFirstSetupFailure(releaseError, 'release')
+        })
       }
+      return firstSetupErrorResponse(c, error)
+    }
 
+    try {
+      const auth = await createAuth(c.env)
       const signInRes = await auth.api.signInEmail({
         body: { email, password },
         headers: c.req.raw.headers,
         asResponse: true
       })
       if (signInRes.ok) {
-        return apiOkWithHeaders(undefined, signInRes.headers, { redirect: '/', message: "初始化成功" })
+        return apiOkWithHeaders(undefined, signInRes.headers, {
+          redirect: '/',
+          message: '初始化成功'
+        })
       }
-      return apiOk(c, undefined, { redirect: '/login', message: "管理员已创建，请登录" })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "创建管理员失败"
-      return apiErr(c, msg, 500)
+    } catch (error) {
+      logFirstSetupFailure(error, 'create-user')
     }
+
+    return apiOk(c, undefined, {
+      redirect: '/login',
+      message: '管理员已创建，请登录'
+    })
   })
 
   app.post('/api/auth/login', async (c) => {
