@@ -4,12 +4,14 @@ import app from '../src/index'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import { updateSettings } from '../src/services/settings'
 import {
+  bindFirstSetupUser,
   claimFirstSetup,
   getFirstSetupState
 } from '../src/services/first-setup'
 import {
   createTestD1,
   markFirstSetupCompleted,
+  seedUser,
   type TestD1
 } from './helpers/d1'
 import {
@@ -64,6 +66,31 @@ async function postJson(
     headers: sameOriginJsonHeaders(),
     body: JSON.stringify(body)
   }, env)
+}
+
+async function getPage(env: Bindings, path: string): Promise<Response> {
+  return await app.request(`${AUTH_ORIGIN}${path}`, undefined, env)
+}
+
+type PageSetupStatus = 'open' | 'claimed' | 'claimed-orphan' | 'completed'
+
+async function setupPageState(status: PageSetupStatus) {
+  const fixture = await setupOpen()
+  if (status === 'claimed' || status === 'claimed-orphan') {
+    const claim = await claimFirstSetup(fixture.db)
+    if (status === 'claimed-orphan') {
+      const userId = 'orphan-admin'
+      await bindFirstSetupUser(fixture.db, { token: claim.token, userId })
+      await seedUser(fixture.db, {
+        id: userId,
+        email: 'orphan-admin@example.test'
+      })
+    }
+  } else if (status === 'completed') {
+    await seedUser(fixture.db)
+    await markFirstSetupCompleted(fixture.db)
+  }
+  return fixture
 }
 
 async function registrationSideEffects(db: D1Database) {
@@ -340,6 +367,90 @@ describe('first setup route', { timeout: 30_000 }, () => {
       })
     }
   )
+
+  it.each(['open', 'claimed', 'claimed-orphan'] as const)(
+    'routes page shells and page APIs to setup while first setup is %s',
+    async (status) => {
+      const { db, env } = await setupPageState(status)
+
+      for (const path of ['/', '/login', '/register', '/verify-email']) {
+        const response = await getPage(env, path)
+        expect(response.status, path).toBe(302)
+        expect(response.headers.get('location'), path).toBe('/setup')
+      }
+
+      const setupShell = await getPage(env, '/setup')
+      expect(setupShell.status).toBe(200)
+      expect(await setupShell.text()).toContain('data-page="setup"')
+
+      for (const path of [
+        '/api/pages/home',
+        '/api/pages/login',
+        '/api/pages/register'
+      ]) {
+        const response = await getPage(env, path)
+        expect(response.status, path).toBe(200)
+        expect(await jsonBody(response), path).toMatchObject({
+          success: true,
+          redirect: '/setup'
+        })
+      }
+
+      const setupData = await getPage(env, '/api/pages/setup')
+      expect(setupData.status).toBe(200)
+      expect(await jsonBody(setupData)).toMatchObject({ success: true })
+      expect(await getFirstSetupState(db)).toMatchObject({
+        status: status === 'open' ? 'open' : 'claimed'
+      })
+      if (status === 'claimed-orphan') {
+        expect(await db.prepare('SELECT COUNT(*) AS n FROM user').first()).toEqual({ n: 1 })
+      }
+    }
+  )
+
+  it('restores normal page navigation after first setup is completed', async () => {
+    const { env } = await setupPageState('completed')
+
+    const homeShell = await getPage(env, '/')
+    expect(homeShell.status).toBe(302)
+    expect(homeShell.headers.get('location')).toBe('/login')
+
+    for (const [path, page] of [
+      ['/login', 'login'],
+      ['/register', 'register'],
+      ['/verify-email', 'verify-email']
+    ] as const) {
+      const response = await getPage(env, path)
+      expect(response.status, path).toBe(200)
+      expect(await response.text(), path).toContain(`data-page="${page}"`)
+    }
+
+    const setupShell = await getPage(env, '/setup')
+    expect(setupShell.status).toBe(302)
+    expect(setupShell.headers.get('location')).toBe('/')
+
+    const homeData = await getPage(env, '/api/pages/home')
+    expect(homeData.status).toBe(401)
+    expect(await jsonBody(homeData)).toMatchObject({
+      success: false,
+      redirect: '/login'
+    })
+
+    for (const path of ['/api/pages/login', '/api/pages/register']) {
+      const response = await getPage(env, path)
+      const body = await jsonBody(response)
+      expect(response.status, path).toBe(200)
+      expect(body, path).toMatchObject({ success: true })
+      expect(body, path).not.toHaveProperty('redirect')
+    }
+
+    const setupData = await getPage(env, '/api/pages/setup')
+    expect(setupData.status).toBe(200)
+    expect(await jsonBody(setupData)).toMatchObject({
+      success: true,
+      redirect: '/'
+    })
+  })
 
   it('logs only allowlisted security events and returns only fixed errors', async () => {
     const { db, env } = await setupOpen()

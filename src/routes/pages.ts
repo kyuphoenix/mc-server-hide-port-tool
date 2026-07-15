@@ -3,16 +3,21 @@ import { getCurrentUser, isSuperAdminUser, requireAdmin } from '../auth'
 import { pageShellResponse } from '../lib/page-shell'
 import { apiErr, apiOk, maskSettingsForAdmin, publicSettings } from '../lib/api'
 import { safeInternalPath } from '../lib/security'
-import { countUsers, listAllRecords, listRecordsByUser, searchUsers, type UserSearchRole } from '../services/dns-records'
+import { listAllRecords, listRecordsByUser, searchUsers, type UserSearchRole } from '../services/dns-records'
 import { maskUsersForAdmin } from '../lib/privacy'
 import { listInviteCodes } from '../services/invite-codes'
 import { listOAuthProviders, listPublicOAuthProviders, OAUTH_TEMPLATES } from '../services/oauth-providers'
 import { getSettings } from '../services/settings'
+import { reconcileFirstSetup } from '../services/first-setup'
 import { listLinkedAccounts, type PasskeyRow } from '../services/user-settings'
 import { createAuth } from '../auth'
 import type { Bindings } from '../services/cloudflare-dns'
 
 type AdminTab = 'settings' | 'oauth' | 'invites' | 'users' | 'dns'
+
+async function firstSetupIsCompleted(db: D1Database): Promise<boolean> {
+  return (await reconcileFirstSetup(db)).status === 'completed'
+}
 
 function parseAdminTab(raw: string | undefined | null): AdminTab {
   const v = String(raw ?? '').trim().toLowerCase()
@@ -49,8 +54,7 @@ function serializeUser(user: Awaited<ReturnType<typeof getCurrentUser>>) {
 
 export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/', async (c) => {
-    const userCount = await countUsers(c.env.DB)
-    if (userCount === 0) return c.redirect('/setup')
+    if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login')
     return pageShellResponse(c, {
@@ -61,6 +65,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/login', async (c) => {
+    if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const next = safeInternalPath(c.req.query('next'), '/')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return c.redirect(next)
@@ -72,6 +77,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/register', async (c) => {
+    if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return c.redirect('/')
     return pageShellResponse(c, {
@@ -82,6 +88,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/verify-email', async (c) => {
+    if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return c.redirect('/')
     return pageShellResponse(c, {
@@ -92,10 +99,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/setup', async (c) => {
-    const userCount = await countUsers(c.env.DB)
-    if (userCount > 0) return c.redirect('/')
-    const user = await getCurrentUser(c.env, c.req.raw.headers)
-    if (user) return c.redirect('/')
+    if (await firstSetupIsCompleted(c.env.DB)) return c.redirect('/')
     return pageShellResponse(c, {
       title: '初始化管理员',
       page: 'setup',
@@ -132,8 +136,9 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/api/pages/home', async (c) => {
-    const userCount = await countUsers(c.env.DB)
-    if (userCount === 0) return apiOk(c, null, { redirect: '/setup' })
+    if (!(await firstSetupIsCompleted(c.env.DB))) {
+      return apiOk(c, null, { redirect: '/setup' })
+    }
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return apiErr(c, '未登录', 401, { redirect: '/login' })
     const records = await listRecordsByUser(c.env.DB, user.id)
@@ -141,6 +146,9 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/api/pages/login', async (c) => {
+    if (!(await firstSetupIsCompleted(c.env.DB))) {
+      return apiOk(c, null, { redirect: '/setup' })
+    }
     const next = safeInternalPath(c.req.query('next'), '/')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, null, { redirect: next })
@@ -154,6 +162,9 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/api/pages/register', async (c) => {
+    if (!(await firstSetupIsCompleted(c.env.DB))) {
+      return apiOk(c, null, { redirect: '/setup' })
+    }
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, null, { redirect: '/' })
     const settings = await getSettings(c.env.DB)
@@ -166,10 +177,9 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/api/pages/setup', async (c) => {
-    const userCount = await countUsers(c.env.DB)
-    if (userCount > 0) return apiOk(c, null, { redirect: '/' })
-    const user = await getCurrentUser(c.env, c.req.raw.headers)
-    if (user) return apiOk(c, null, { redirect: '/' })
+    if (await firstSetupIsCompleted(c.env.DB)) {
+      return apiOk(c, null, { redirect: '/' })
+    }
     return apiOk(c, {})
   })
 
