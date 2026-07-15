@@ -28,10 +28,8 @@ import {
 import { sendVerificationCode } from '../services/mailer'
 import {
   extractGitHubAgeRejectedDetails,
-  getGitHubUser,
   githubAgeRejectedPath,
-  isGitHubAgeRejectedError,
-  meetsAgeRequirement
+  isGitHubAgeRejectedError
 } from '../services/github'
 import { type Bindings } from '../services/cloudflare-dns'
 import {
@@ -39,6 +37,17 @@ import {
   redirectWithHeaders
 } from '../lib/http'
 import { finalizeInviteUsage, findUserIdByEmail, requireInviteCodeIfNeeded } from '../lib/invite'
+import { findOAuthProviderByProviderId } from '../services/oauth-providers'
+import {
+  OAUTH_REGISTRATION_INTENT_COOKIE,
+  bindOAuthRegistrationIntentState,
+  buildOAuthRegistrationIntentClearCookie,
+  buildOAuthRegistrationIntentCookie,
+  cleanupOAuthRegistrationIntents,
+  createOAuthRegistrationIntent,
+  createOAuthRegistrationSecurityEvent,
+  releasePendingOAuthRegistrationIntent
+} from '../services/oauth-registration-intents'
 import { requestIsHttps, safeInternalPath } from '../lib/security'
 import { requireMutationCsrf } from '../lib/csrf'
 import {
@@ -50,11 +59,20 @@ import {
   requireJsonMutation
 } from '../lib/api'
 
-function inviteCookie(code: string | null, secure: boolean, maxAge: number): string {
-  if (!code) {
-    return `pending_invite_code=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`
-  }
-  return `pending_invite_code=${encodeURIComponent(code)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`
+function logOAuthRegistrationFailure(error: unknown, providerId: string): void {
+  console.error(JSON.stringify(createOAuthRegistrationSecurityEvent(error, { providerId })))
+}
+
+async function cleanupOAuthRegistrationRouteState(
+  db: D1Database,
+  token: string | null
+): Promise<void> {
+  await releasePendingOAuthRegistrationIntent(db, token).catch((error) => {
+    logOAuthRegistrationFailure(error, 'unknown')
+  })
+  await cleanupOAuthRegistrationIntents(db).catch((error) => {
+    logOAuthRegistrationFailure(error, 'unknown')
+  })
 }
 
 export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
@@ -374,120 +392,126 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const body = await readJsonBody(c)
     const providerId = String(body.provider_id ?? '').trim()
     const inviteCode = String(body.invite_code ?? '').trim()
-    if (!providerId) return apiErr(c, "请选择 OAuth 应用")
+    const oauthRegistrationFailed = () =>
+      apiErr(c, 'OAuth 注册失败，请重新发起注册', 400, {
+        code: 'OAUTH_REGISTRATION_FAILED'
+      })
 
-    const inviteCheck = await requireInviteCodeIfNeeded(c.env.DB, settings, inviteCode)
-    if (!inviteCheck.ok) return apiErr(c, inviteCheck.message)
+    if (!providerId) return oauthRegistrationFailed()
 
-    const auth = await createAuth(c.env)
+    let intent: Awaited<ReturnType<typeof createOAuthRegistrationIntent>> | null = null
+    let eventProviderId = 'unknown'
     try {
+      const provider = await findOAuthProviderByProviderId(c.env.DB, providerId)
+      if (!provider || provider.enabled !== 1) {
+        throw new Error('oauth_provider_unavailable')
+      }
+      eventProviderId = provider.provider_id
+
+      await cleanupOAuthRegistrationIntents(c.env.DB).catch((error) => {
+        logOAuthRegistrationFailure(error, eventProviderId)
+      })
+      intent = await createOAuthRegistrationIntent(c.env.DB, {
+        providerId,
+        inviteRequired: settings.invite_required,
+        inviteCode
+      })
+
+      const auth = await createAuth(c.env)
       const res = await (auth.api as any).signInWithOAuth2({
         body: {
           providerId,
           callbackURL: '/register/oauth/done',
-          errorCallbackURL: '/register?error=' + encodeURIComponent("OAuth 注册失败"),
+          errorCallbackURL: '/register/oauth/error',
           requestSignUp: true
         },
         headers: c.req.raw.headers,
         asResponse: true
       })
       const extracted = await extractOAuthRedirectUrl(res)
-      if (extracted.url) {
-        const headers = new Headers(extracted.headers)
-        if (inviteCheck.code) {
-          headers.append(
-            'Set-Cookie',
-            inviteCookie(inviteCheck.code, requestIsHttps(c.req.raw), 1800)
-          )
-        }
-        return apiOkWithHeaders(undefined, headers, { redirect: extracted.url })
+      if (!extracted.url) throw new Error('oauth_redirect_missing')
+
+      const authorization = new URL(extracted.url)
+      const state = authorization.searchParams.get('state') || ''
+      if (!state) throw new Error('oauth_state_missing')
+      await bindOAuthRegistrationIntentState(c.env.DB, {
+        id: intent.id,
+        token: intent.token,
+        providerId,
+        state
+      })
+
+      const headers = new Headers(extracted.headers)
+      headers.append(
+        'Set-Cookie',
+        buildOAuthRegistrationIntentCookie(intent.token, requestIsHttps(c.req.raw))
+      )
+      return apiOkWithHeaders(undefined, headers, { redirect: extracted.url })
+    } catch (error) {
+      logOAuthRegistrationFailure(error, eventProviderId)
+      if (intent) {
+        await releasePendingOAuthRegistrationIntent(c.env.DB, intent.token).catch((releaseError) => {
+          logOAuthRegistrationFailure(releaseError, eventProviderId)
+        })
       }
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "OAuth 注册失败"
-        return apiErr(c, msg, res.status)
-      }
-      return apiErr(c, "OAuth 注册失败")
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "OAuth 注册失败"
-      return apiErr(c, msg, 500)
+      return oauthRegistrationFailed()
     }
   })
 
   app.get('/register/oauth/done', async (c) => {
-    const user = await getCurrentUser(c.env, c.req.raw.headers)
-    const settings = await getSettings(c.env.DB)
-    const cookieHeader = c.req.header('Cookie') || ''
-    const pendingInvite = parseCookie(cookieHeader, 'pending_invite_code')
-    const clearInviteCookie = inviteCookie(null, requestIsHttps(c.req.raw), 0)
-    if (!user) {
-      return redirectWithHeaders('/login', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
+    let user: Awaited<ReturnType<typeof getCurrentUser>> = null
+    try {
+      user = await getCurrentUser(c.env, c.req.raw.headers)
+    } catch (error) {
+      logOAuthRegistrationFailure(error, 'unknown')
     }
-
-    const failOAuthRegister = async (message: string) => {
-      await deleteUserCascade(c.env.DB, user.id)
-      return redirectWithHeaders(
-        '/register?error=' + encodeURIComponent(message),
-        302,
-        new Headers({ 'Set-Cookie': clearInviteCookie })
-      )
-    }
-
-    const createdAtMs = new Date(user.createdAt).getTime()
-    const isNewUser = Number.isFinite(createdAtMs) && Date.now() - createdAtMs < 5 * 60 * 1000
-
-    if (isNewUser) {
-      const oauthSignupAllowed =
-        settings.registration_enabled &&
-        (settings.registration_mode === 'oauth' || settings.registration_mode === 'both')
-      if (!oauthSignupAllowed) {
-        return await failOAuthRegister("当前不允许 OAuth 注册")
-      }
-    }
-
-    if (isNewUser && settings.github_min_account_age_days > 0) {
-      const account = await c.env.DB
-        .prepare(
-          "SELECT accessToken FROM account WHERE userId = ? AND providerId = 'github' ORDER BY updatedAt DESC LIMIT 1"
+    const token = parseCookie(
+      c.req.header('Cookie') || '',
+      OAUTH_REGISTRATION_INTENT_COOKIE
+    )
+    await cleanupOAuthRegistrationRouteState(c.env.DB, token)
+    const headers = new Headers({
+      'Set-Cookie': buildOAuthRegistrationIntentClearCookie(requestIsHttps(c.req.raw))
+    })
+    return user
+      ? redirectWithHeaders('/', 302, headers)
+      : redirectWithHeaders(
+          '/login?error=' + encodeURIComponent('OAuth 注册失败，请重新发起注册'),
+          302,
+          headers
         )
-        .bind(user.id)
-        .first<{ accessToken: string | null }>()
+  })
 
-      if (account) {
-        if (!account.accessToken) {
-          await deleteUserCascade(c.env.DB, user.id)
-          return redirectWithHeaders(
-            githubAgeRejectedPath(settings.github_min_account_age_days),
-            302,
-            new Headers({ 'Set-Cookie': clearInviteCookie })
-          )
-        }
-        const ghUser = await getGitHubUser(account.accessToken)
-        if (!ghUser || !meetsAgeRequirement(ghUser.created_at, settings.github_min_account_age_days)) {
-          await deleteUserCascade(c.env.DB, user.id)
-          const actualDays = ghUser
-            ? (Date.now() - Date.parse(ghUser.created_at)) / 86400000
-            : null
-          return redirectWithHeaders(
-            githubAgeRejectedPath(settings.github_min_account_age_days, actualDays),
-            302,
-            new Headers({ 'Set-Cookie': clearInviteCookie })
-          )
-        }
-      }
-    }
-
-    if (settings.invite_required && isNewUser) {
-      const used = await finalizeInviteUsage(c.env.DB, pendingInvite, user.id)
-      if (!used.ok) return await failOAuthRegister(used.message)
-    }
-    return redirectWithHeaders('/', 302, new Headers({ 'Set-Cookie': clearInviteCookie }))
+  app.get('/register/oauth/error', async (c) => {
+    const token = parseCookie(
+      c.req.header('Cookie') || '',
+      OAUTH_REGISTRATION_INTENT_COOKIE
+    )
+    await cleanupOAuthRegistrationRouteState(c.env.DB, token)
+    const headers = new Headers({
+      'Set-Cookie': buildOAuthRegistrationIntentClearCookie(requestIsHttps(c.req.raw))
+    })
+    return redirectWithHeaders(
+      '/register?error=' +
+        encodeURIComponent('OAuth 注册失败，请重新发起注册') +
+        '&code=OAUTH_REGISTRATION_FAILED',
+      302,
+      headers
+    )
   })
 
   app.all('/api/auth/*', async (c) => {
-    const auth = await createAuth(c.env)
     const pathname = new URL(c.req.url).pathname
     const method = c.req.method.toUpperCase()
+    const authSubpath = pathname
+      .replace(/^\/api\/auth/, '')
+      .replace(/\/+$/, '') || '/'
+
+    if (method === 'POST' && authSubpath === '/sign-in/oauth2') {
+      return apiErr(c, '请通过网站登录或注册入口使用 OAuth', 403, {
+        code: 'OAUTH2_PUBLIC_ENTRY_DISABLED'
+      })
+    }
 
     if (method === 'POST' && (pathname.endsWith('/sign-up/email') || pathname.includes('/sign-up/email'))) {
       return c.json(
@@ -498,6 +522,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         403
       )
     }
+
+    const auth = await createAuth(c.env)
 
     const isGitHubOAuthCallback =
       pathname.endsWith('/oauth2/callback/github') ||
