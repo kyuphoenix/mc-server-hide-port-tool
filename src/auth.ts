@@ -8,6 +8,12 @@ import {
 } from './services/oauth-providers'
 import { getSettings } from './services/settings'
 import { allocateNextUserId } from './services/user-ids'
+import { readGenericOAuthCallback } from './lib/better-auth-oauth-context'
+import {
+  authorizeOAuthRegistrationIntent,
+  consumeAuthorizedOAuthRegistrationIntent,
+  createOAuthRegistrationSecurityEvent
+} from './services/oauth-registration-intents'
 
 export type AuthBindings = {
   DB: D1Database
@@ -17,6 +23,10 @@ export type AuthBindings = {
 }
 
 export type Auth = ReturnType<typeof betterAuth>
+
+const logOAuthRegistrationFailure = (error: unknown, providerId: string) => {
+  console.error(JSON.stringify(createOAuthRegistrationSecurityEvent(error, { providerId })))
+}
 
 async function resolveOAuthSignupPolicy(db: D1Database): Promise<{
   disableSignUp: boolean
@@ -106,15 +116,44 @@ export async function createAuth(
     databaseHooks: {
       user: {
         create: {
-          before: async (user) => {
+          before: async (user, context) => {
             // Assign sequential numeric user ids: "1", "2", "3", ...
             // createWithHooks uses forceAllowId, so this id is persisted.
             const id = await allocateNextUserId(env.DB)
+            const callback = readGenericOAuthCallback(context)
+            if (callback) {
+              try {
+                await authorizeOAuthRegistrationIntent(env.DB, {
+                  token: callback.intentToken,
+                  providerId: callback.providerId,
+                  state: callback.state,
+                  userId: id
+                })
+              } catch (error) {
+                logOAuthRegistrationFailure(error, callback.providerId)
+                throw error
+              }
+            }
             return {
               data: {
                 ...user,
                 id
               }
+            }
+          },
+          after: async (user, context) => {
+            const callback = readGenericOAuthCallback(context)
+            if (!callback) return
+            try {
+              await consumeAuthorizedOAuthRegistrationIntent(env.DB, {
+                userId: user.id,
+                token: callback.intentToken,
+                providerId: callback.providerId,
+                state: callback.state
+              })
+            } catch (error) {
+              logOAuthRegistrationFailure(error, callback.providerId)
+              throw error
             }
           }
         }
