@@ -494,4 +494,3 @@ describe('OAuth registration routes', { timeout: 15_000 }, () => {
       .first()).toEqual({ reserved_intent_id: null, used_by: userId })
   })
 })
-
