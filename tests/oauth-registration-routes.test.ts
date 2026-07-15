@@ -6,6 +6,7 @@ import {
   bindOAuthRegistrationIntentState,
   createOAuthRegistrationIntent
 } from '../src/services/oauth-registration-intents'
+import { claimFirstSetup } from '../src/services/first-setup'
 import {
   createTestD1,
   markFirstSetupCompleted,
@@ -35,6 +36,27 @@ async function setup(
   await markFirstSetupCompleted(instance.db)
   await setRegistrationPolicy(instance.db, policy)
   await seedFixtureOAuthProvider(instance.db)
+  const env: Bindings = {
+    DB: instance.db,
+    BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    BETTER_AUTH_URL: AUTH_ORIGIN,
+    APP_NAME: 'Test App'
+  } as unknown as Bindings
+  return { db: instance.db, env }
+}
+
+async function setupUninitialized(status: 'open' | 'claimed') {
+  const instance = await createTestD1()
+  instances.push(instance)
+  await setRegistrationPolicy(instance.db, {
+    enabled: true,
+    mode: 'both',
+    inviteRequired: false
+  })
+  await seedFixtureOAuthProvider(instance.db)
+  if (status === 'claimed') {
+    await claimFirstSetup(instance.db)
+  }
   const env: Bindings = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
@@ -90,6 +112,30 @@ function allSetCookies(headers: Headers): string[] {
 }
 
 describe('OAuth registration routes', { timeout: 15_000 }, () => {
+
+  it.each(['open', 'claimed'] as const)(
+    'blocks OAuth registration before intent or provider fetch while setup is %s',
+    async (status) => {
+      const { db, env } = await setupUninitialized(status)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        throw new Error('provider fetch must not run before setup')
+      })
+
+      const response = await postJson(env, '/api/auth/oauth/register', {
+        provider_id: FIXTURE_PROVIDER_ID,
+        invite_code: ''
+      })
+
+      expect(response.status).toBe(409)
+      expect(await jsonBody(response)).toMatchObject({
+        success: false,
+        code: 'SETUP_NOT_READY'
+      })
+      expect(await intentRows(db)).toHaveLength(0)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    }
+  )
+
   it('blocks the public generic OAuth sign-in endpoint', async () => {
     const { env } = await setup()
     const response = await postJson(env, '/api/auth/sign-in/oauth2', {

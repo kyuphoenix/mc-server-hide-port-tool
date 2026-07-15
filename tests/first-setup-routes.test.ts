@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { hashPassword } from 'better-auth/crypto'
 import app from '../src/index'
 import type { Bindings } from '../src/services/cloudflare-dns'
+import { updateSettings } from '../src/services/settings'
 import {
   claimFirstSetup,
   getFirstSetupState
@@ -50,6 +52,33 @@ async function postSetup(
 
 async function jsonBody(response: Response): Promise<Record<string, unknown>> {
   return await response.json() as Record<string, unknown>
+}
+
+async function postJson(
+  env: Bindings,
+  path: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  return await app.request(`${AUTH_ORIGIN}${path}`, {
+    method: 'POST',
+    headers: sameOriginJsonHeaders(),
+    body: JSON.stringify(body)
+  }, env)
+}
+
+async function registrationSideEffects(db: D1Database) {
+  const [verifications, users, accounts, counter] = await Promise.all([
+    db.prepare('SELECT COUNT(*) AS n FROM email_verification').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM user').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM account').first<{ n: number }>(),
+    db.prepare("SELECT value FROM user_id_counter WHERE name = 'user'").first<{ value: number }>()
+  ])
+  return {
+    verifications: Number(verifications?.n ?? 0),
+    users: Number(users?.n ?? 0),
+    accounts: Number(accounts?.n ?? 0),
+    nextId: Number(counter?.value ?? 0)
+  }
 }
 
 async function counts(db: D1Database) {
@@ -224,6 +253,93 @@ describe('first setup route', { timeout: 30_000 }, () => {
     ).first()).toEqual({ role: 'admin', super_admin: 1 })
     expect(await getFirstSetupState(db)).toMatchObject({ status: 'completed' })
   })
+
+
+  it.each(['open', 'claimed'] as const)(
+    'blocks email registration before side effects while setup is %s',
+    async (status) => {
+      const { db, env } = await setupOpen()
+      await updateSettings(db, {
+        registration_enabled: true,
+        registration_mode: 'email',
+        invite_required: false,
+        resend_enabled: true,
+        resend_accounts: [{ api_key: 'private-resend-key', from: 'sender@example.test' }]
+      })
+      if (status === 'claimed') await claimFirstSetup(db)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        throw new Error('mailer must not be called before setup')
+      })
+
+      const response = await postJson(env, '/api/auth/register', {
+        name: 'Blocked Registration',
+        email: 'blocked-registration@example.test',
+        password: 'password123',
+        invite_code: ''
+      })
+
+      expect(response.status).toBe(409)
+      expect(await jsonBody(response)).toMatchObject({
+        success: false,
+        code: 'SETUP_NOT_READY'
+      })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(await registrationSideEffects(db)).toEqual({
+        verifications: 0,
+        users: 0,
+        accounts: 0,
+        nextId: 0
+      })
+    }
+  )
+
+  it.each(['open', 'claimed'] as const)(
+    'blocks email verification before reading private pending data while setup is %s',
+    async (status) => {
+      const { db, env } = await setupOpen()
+      const email = `pending-${status}@example.test`
+      const privateName = `Private Pending ${status}`
+      const privatePassword = `private-sealed-password-${status}`
+      const code = '123456'
+      await db.prepare(
+        `INSERT INTO email_verification
+          (id, email, name, password, code_hash, expires_at, created_at, invite_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+      ).bind(
+        crypto.randomUUID(),
+        email,
+        privateName,
+        privatePassword,
+        await hashPassword(code),
+        Date.now() + 60_000,
+        Date.now()
+      ).run()
+      if (status === 'claimed') await claimFirstSetup(db)
+
+      const response = await postJson(env, '/api/auth/verify-email', { email, code })
+      const responseText = await response.text()
+
+      expect(response.status).toBe(409)
+      expect(JSON.parse(responseText)).toMatchObject({
+        success: false,
+        code: 'SETUP_NOT_READY'
+      })
+      expect(responseText).not.toContain(privateName)
+      expect(responseText).not.toContain(email)
+      expect(responseText).not.toContain(privatePassword)
+      expect(await db.prepare(
+        'SELECT name, password FROM email_verification WHERE email = ?'
+      ).bind(email).first()).toEqual({ name: privateName, password: privatePassword })
+      expect(await db.prepare(
+        'SELECT COUNT(*) AS n FROM rate_limit_bucket'
+      ).first()).toEqual({ n: 0 })
+      expect(await registrationSideEffects(db)).toMatchObject({
+        users: 0,
+        accounts: 0,
+        nextId: 0
+      })
+    }
+  )
 
   it('logs only allowlisted security events and returns only fixed errors', async () => {
     const { db, env } = await setupOpen()

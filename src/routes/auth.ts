@@ -45,6 +45,7 @@ import {
 import { requestIsHttps, safeInternalPath } from '../lib/security'
 import { requireMutationCsrf } from '../lib/csrf'
 import {
+  assertFirstSetupCompleted,
   claimFirstSetup,
   createFirstSetupSecurityEvent,
   FirstSetupError,
@@ -69,6 +70,29 @@ type AuthRouteContext = Context<{ Bindings: Bindings }>
 
 function logFirstSetupFailure(error: unknown, stage: FirstSetupStage): void {
   console.error(JSON.stringify(createFirstSetupSecurityEvent(error, { stage })))
+}
+
+async function requireFirstSetupCompleted(
+  c: AuthRouteContext
+): Promise<Response | null> {
+  try {
+    await assertFirstSetupCompleted(c.env.DB)
+    return null
+  } catch (error) {
+    if (
+      error instanceof FirstSetupError &&
+      error.code === 'SETUP_NOT_READY'
+    ) {
+      return apiErr(c, '请先完成管理员初始化', 409, {
+        code: error.code
+      })
+    }
+
+    logFirstSetupFailure(error, 'guard')
+    return apiErr(c, '初始化状态不可用', 503, {
+      code: 'SETUP_NOT_READY'
+    })
+  }
 }
 
 function firstSetupErrorResponse(c: AuthRouteContext, error: unknown): Response {
@@ -225,6 +249,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, undefined, { redirect: '/' })
 
+    const setupDenied = await requireFirstSetupCompleted(c)
+    if (setupDenied) return setupDenied
+
     const settings = await getSettings(c.env.DB)
     if (!settings.registration_enabled) return apiErr(c, "当前已关闭注册", 403)
     if (settings.registration_mode === 'oauth') return apiErr(c, "当前仅支持 OAuth 注册", 403)
@@ -295,6 +322,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (denied) return denied
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, undefined, { redirect: '/' })
+
+    const setupDenied = await requireFirstSetupCompleted(c)
+    if (setupDenied) return setupDenied
 
     const settings = await getSettings(c.env.DB)
     const body = await readJsonBody(c)
@@ -416,6 +446,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (denied) return denied
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, undefined, { redirect: '/' })
+
+    const setupDenied = await requireFirstSetupCompleted(c)
+    if (setupDenied) return setupDenied
 
     const settings = await getSettings(c.env.DB)
     if (!settings.registration_enabled) return apiErr(c, "当前已关闭注册", 403)
