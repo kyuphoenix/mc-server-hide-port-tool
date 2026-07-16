@@ -1,4 +1,16 @@
 import { getSettings, type ResendAccount } from './settings'
+import type { MailExternalFailureCode } from '../lib/external-service-security'
+
+export type MailSendFailure = {
+  ok: false
+  code: MailExternalFailureCode
+  message?: string
+  status?: number
+  retriable?: boolean
+  accountIndex?: number
+}
+
+export type MailSendResult = { ok: true } | MailSendFailure
 
 type MailTemplateInput = {
   title: string
@@ -127,7 +139,7 @@ function isRetriableResendStatus(status: number): boolean {
 async function sendWithAccount(
   account: ResendAccount,
   input: { toEmail: string; subject: string; html: string }
-): Promise<{ ok: true } | { ok: false; status: number; message: string; retriable: boolean }> {
+): Promise<{ ok: true } | { ok: false; status: number; retriable: boolean }> {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -144,12 +156,10 @@ async function sendWithAccount(
 
   if (res.ok) return { ok: true }
 
-  const text = await res.text().catch(() => '')
-  const message = `Resend API 错误：${res.status} ${text.slice(0, 200)}`
+  await res.text().catch(() => '')
   return {
     ok: false,
     status: res.status,
-    message,
     retriable: isRetriableResendStatus(res.status)
   }
 }
@@ -162,23 +172,23 @@ export async function sendResendEmail(
     html: string
     ignoreEnabledFlag?: boolean
   }
-): Promise<{ ok: boolean; message?: string }> {
+): Promise<MailSendResult> {
   const settings = await getSettings(env.DB)
   const accounts = settings.resend_accounts || []
 
   if (accounts.length === 0) {
-    return { ok: false, message: '后端未配置 Resend API Key 或发件人地址' }
+    return { ok: false, code: 'MAIL_CONFIG_MISSING', message: '邮件配置暂不可用，请检查后台配置' }
   }
   if (!input.ignoreEnabledFlag && !settings.resend_enabled) {
-    return { ok: false, message: '请先启用邮件服务（Resend）' }
+    return { ok: false, code: 'MAIL_DISABLED', message: '邮件配置暂不可用，请检查后台配置' }
   }
 
   const toEmail = String(input.toEmail || '').trim()
   if (!toEmail || !toEmail.includes('@')) {
-    return { ok: false, message: '请输入有效的邮箱地址' }
+    return { ok: false, code: 'MAIL_INVALID_RECIPIENT', message: '请输入有效的邮箱地址' }
   }
 
-  const errors: string[] = []
+  let lastFailure: MailSendFailure | null = null
   for (let i = 0; i < accounts.length; i++) {
     const account = accounts[i]!
     try {
@@ -189,19 +199,33 @@ export async function sendResendEmail(
       })
       if (result.ok) return { ok: true }
 
-      errors.push(`#${i + 1} ${account.from}: ${result.message}`)
+      lastFailure = {
+        ok: false,
+        code: 'RESEND_REQUEST_FAILED',
+        message: '邮件发送失败',
+        status: result.status,
+        retriable: result.retriable,
+        accountIndex: i
+      }
       // Always try next account silently until all are exhausted.
       if (i < accounts.length - 1) continue
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '网络错误'
-      errors.push(`#${i + 1} ${account.from}: ${msg}`)
+    } catch {
+      lastFailure = {
+        ok: false,
+        code: 'MAIL_NETWORK_FAILURE',
+        message: '邮件发送失败',
+        retriable: true,
+        accountIndex: i
+      }
       if (i < accounts.length - 1) continue
     }
   }
 
-  return {
+  return lastFailure ?? {
     ok: false,
-    message: errors[errors.length - 1] || '所有 Resend 账号均发送失败'
+    code: 'MAIL_ALL_ACCOUNTS_FAILED',
+    message: '邮件发送失败',
+    retriable: false
   }
 }
 
@@ -230,7 +254,7 @@ export async function sendVerificationCode(
 export async function sendTestEmail(
   env: { DB: D1Database },
   toEmail: string
-): Promise<{ ok: boolean; message?: string }> {
+): Promise<MailSendResult> {
   const subject = '[测试邮件] Minecraft 端口隐藏工具'
   const now = new Date().toLocaleString('zh-CN')
   const html = renderMailTemplate({

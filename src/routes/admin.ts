@@ -37,7 +37,10 @@ import {
 import { maskUsersForAdmin } from '../lib/privacy'
 import {
   DNS_GENERIC_SAFE_MESSAGE,
-  logDnsExternalServiceFailure
+  MAIL_TEST_SUCCESS_MESSAGE,
+  logDnsExternalServiceFailure,
+  logMailExternalServiceFailure,
+  safeMailTestClientMessage
 } from '../lib/external-service-security'
 
 function asBool(v: unknown): boolean {
@@ -398,11 +401,23 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     try {
       const result = await sendTestEmail(c.env, toEmail)
-      if (!result.ok) return apiErr(c, result.message || "测试邮件发送失败", 500)
-      return apiOk(c, undefined, { message: "测试邮件已提交发送：" + toEmail })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "测试邮件发送失败"
-      return apiErr(c, msg, 500)
+      if (!result.ok) {
+        if (result.code !== 'MAIL_INVALID_RECIPIENT') {
+          logMailExternalServiceFailure({
+            code: result.code,
+            stage: result.code === 'MAIL_CONFIG_MISSING' || result.code === 'MAIL_DISABLED' ? 'config' : 'send',
+            status: result.status,
+            accountIndex: result.accountIndex,
+            retriable: result.retriable
+          })
+        }
+        const status = result.code === 'MAIL_INVALID_RECIPIENT' ? 400 : 500
+        return apiErr(c, safeMailTestClientMessage(result.code), status)
+      }
+      return apiOk(c, undefined, { message: MAIL_TEST_SUCCESS_MESSAGE })
+    } catch {
+      logMailExternalServiceFailure({ code: 'MAIL_NETWORK_FAILURE', stage: 'send', retriable: true })
+      return apiErr(c, safeMailTestClientMessage('MAIL_NETWORK_FAILURE'), 500)
     }
   })
 }
