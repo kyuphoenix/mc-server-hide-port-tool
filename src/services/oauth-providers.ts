@@ -33,6 +33,25 @@ export type OAuthProviderPublic = {
   sort_order: number
 }
 
+export type OAuthProviderAdminView = {
+  id: string
+  provider_id: string
+  name: string
+  client_id: string
+  has_client_secret: boolean
+  discovery_url: string | null
+  authorization_url: string | null
+  token_url: string | null
+  user_info_url: string | null
+  scopes: string
+  pkce: number
+  enabled: number
+  sort_order: number
+  icon_url: string | null
+  created_at: number
+  updated_at: number
+}
+
 export type OAuthProviderInput = {
   provider_id: string
   name: string
@@ -237,6 +256,32 @@ export async function listOAuthProviders(db: D1Database): Promise<OAuthProviderR
     .prepare('SELECT * FROM oauth_provider ORDER BY sort_order ASC, created_at ASC')
     .all<OAuthProviderRow>()
   return result.results ?? []
+}
+
+export function maskOAuthProviderForAdmin(row: OAuthProviderRow): OAuthProviderAdminView {
+  return {
+    id: row.id,
+    provider_id: row.provider_id,
+    name: row.name,
+    client_id: row.client_id,
+    has_client_secret: String(row.client_secret ?? '').trim().length > 0,
+    discovery_url: row.discovery_url,
+    authorization_url: row.authorization_url,
+    token_url: row.token_url,
+    user_info_url: row.user_info_url,
+    scopes: row.scopes,
+    pkce: row.pkce,
+    enabled: row.enabled,
+    sort_order: row.sort_order,
+    icon_url: row.icon_url,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+export async function listOAuthProvidersForAdmin(db: D1Database): Promise<OAuthProviderAdminView[]> {
+  const rows = await listOAuthProviders(db)
+  return rows.map(maskOAuthProviderForAdmin)
 }
 
 async function loadEnabledOAuthProviders(db: D1Database): Promise<OAuthProviderRow[]> {

@@ -22,6 +22,7 @@ import { sendTestEmail } from '../services/mailer'
 import {
   createOAuthProvider,
   deleteOAuthProvider,
+  maskOAuthProviderForAdmin,
   setOAuthProviderEnabled,
   updateOAuthProvider
 } from '../services/oauth-providers'
@@ -313,7 +314,9 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       icon_url: String(body.icon_url ?? '')
     })
     if (!result.ok) return apiErr(c, result.message)
-    return apiOk(c, { provider: result.provider }, { message: "已添加 OAuth 应用 " + result.provider.name })
+    return apiOk(c, { provider: maskOAuthProviderForAdmin(result.provider) }, {
+      message: "已添加 OAuth 应用 " + result.provider.name
+    })
   })
 
   app.post('/api/admin/oauth/:id/update', async (c) => {

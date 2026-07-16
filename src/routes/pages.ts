@@ -6,7 +6,7 @@ import { safeInternalPath } from '../lib/security'
 import { listAllRecords, listRecordsByUser, searchUsers, type UserSearchRole } from '../services/dns-records'
 import { maskUsersForAdmin } from '../lib/privacy'
 import { listInviteCodes } from '../services/invite-codes'
-import { listOAuthProviders, listPublicOAuthProviders, OAUTH_TEMPLATES } from '../services/oauth-providers'
+import { listOAuthProvidersForAdmin, listPublicOAuthProviders, OAUTH_TEMPLATES } from '../services/oauth-providers'
 import { getSettings } from '../services/settings'
 import { reconcileFirstSetup } from '../services/first-setup'
 import { listLinkedAccounts, type PasskeyRow } from '../services/user-settings'
@@ -222,7 +222,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
       listAllRecords(c.env.DB),
       getSettings(c.env.DB),
       listInviteCodes(c.env.DB),
-      listOAuthProviders(c.env.DB)
+      listOAuthProvidersForAdmin(c.env.DB)
     ])
     return apiOk(c, {
       activeTab,
