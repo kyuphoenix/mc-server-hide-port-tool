@@ -158,7 +158,7 @@ function assertNoPrivateText(text: string) {
   }
 }
 
-function parsedSecurityEvents(errorSpy: ReturnType<typeof vi.spyOn>) {
+function parsedSecurityEvents(errorSpy: { mock: { calls: unknown[][] } }): Array<Record<string, unknown>> {
   return errorSpy.mock.calls.map((call) => {
     expect(call).toHaveLength(1)
     return JSON.parse(String(call[0])) as Record<string, unknown>
