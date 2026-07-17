@@ -5,7 +5,14 @@ example1_com_CLOUDFLARE_API_TOKEN=your_example1_com_api_token_here
 example2_com_CLOUDFLARE_API_TOKEN=your_example2_com_api_token_here
 303302_xyz_CLOUDFLARE_API_TOKEN=your_303302_xyz_api_token_here
 DOMAINS=["example1.com","example2.com","303302.xyz"]
+# 两个密钥都必须至少 32 字符，并分别独立随机生成，不能使用相同值。
 BETTER_AUTH_SECRET=replace_with_a_long_random_string
+DATA_ENCRYPTION_KEY=replace_with_an_independent_long_random_string
+# DATA_ENCRYPTION_KEY_PREVIOUS=previous_key_during_rotation_only
 BETTER_AUTH_URL=http://localhost:8787
 
 # OAuth（含 GitHub）在管理后台配置，写入 D1 oauth_provider；无需 GITHUB_CLIENT_* 环境变量。
+
+# 自定义 OAuth provider 的额外主机白名单；逗号分隔精确主机或 *.example.com。
+# 不含 scheme、端口或路径；未使用自定义主机时保持为空。
+OAUTH_ALLOWED_HOSTS=

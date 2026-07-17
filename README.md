@@ -9,11 +9,13 @@
 - **可配置注册流程**：后台可开关注册，模式为 `email` / `oauth` / `both`
 - **邀请码注册（可选）**：开启后邮箱与 OAuth 注册都需要邀请码；仅管理员/超级管理员可生成
 - **邮箱后缀白/黑名单**：可同时启用，按后缀匹配（支持子域，如 `gmail.com` 会匹配 `mail.gmail.com`）
-- **邮箱验证码**：启用 Resend 后需邮箱验证码注册；验证码哈希存储，待注册密码使用 `BETTER_AUTH_SECRET` 密封保存
+- **邮箱验证码**：启用 Resend 后需邮箱验证码注册；验证码哈希存储，待注册密码使用独立 `DATA_ENCRYPTION_KEY` 密封保存，并保留认证旧密文兼容解密
 - **通用 OAuth 登录/注册**：后台添加任意 OAuth/OIDC 应用，内置 GitHub / Google / Microsoft / Discord / Linux.do / OIDC 模板；支持自定义图标 URL
 - **GitHub 账号天数限制**：当存在 `provider_id=github` 的应用时，可限制最短注册天数；未达标会进入专门提示页，不会创建本地账号
 - **多根域名支持**：每个根域名使用独立 Cloudflare API Token，命名为 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`
 - **记录数量与子域名限制**：全局 `max_records_per_user` / `min_subdomain_length`；可对单用户覆盖记录上限。超级管理员与管理员创建记录时无上限，也不受最小子域名长度限制
+- **可恢复 DNS 同步**：D1 保存 pending 变更、`sync_status` 与安全错误码；外部 DNS 失败后可重试，不通过删除本地行掩盖状态
+- **可恢复用户删除**：后台删除使用持久化作业与租约分批清理 DNS，Worker 中断后可继续处理
 - **D1 持久化**：用户、会话、DNS 归属、验证码、设置、邀请码、OAuth 应用均存 Cloudflare D1
 - **GitHub Actions 一键部署**：自动创建 D1、应用迁移、注入 secrets/vars 并部署 Worker
 
@@ -29,15 +31,16 @@
 
 ## 前置要求
 
-- Node.js 18+
+- Node.js 22+（与当前 Wrangler / Miniflare 要求一致）
 - pnpm
 - Cloudflare 账户，并已将至少一个根域名接入 Cloudflare DNS
 - 每个根域名一份具有 DNS 编辑权限的 Cloudflare API Token
 
 ## 部署方法
 
-- **方式一：本地/服务器手动部署** — 见上方，或完整步骤 [`docs/deploy-local.md`](docs/deploy-local.md)
+- **方式一：本地/服务器手动部署** — 见 [`docs/deploy-local.md`](docs/deploy-local.md)
 - **方式二：GitHub Actions 一键部署（推荐）** — 见 [`docs/deploy-github-actions.md`](docs/deploy-github-actions.md)
+- **生产发布、监控、恢复与回滚** — 见 [`docs/production-runbook.md`](docs/production-runbook.md)
 
 ### 变量对照
 
@@ -46,7 +49,10 @@
 | `<域名点换下划线>_CLOUDFLARE_API_TOKEN` | `.dev.vars` 或 `wrangler secret put` | 汇总到仓库 secret `CLOUDFLARE_DOMAINS_API_TOKEN`，CI 解析后注入 |
 | `DOMAINS` | `.dev.vars` / `wrangler.jsonc` vars | 通常由 CI 从 `CLOUDFLARE_DOMAINS_API_TOKEN` 派生 |
 | `BETTER_AUTH_SECRET` | `wrangler secret put` 或 `.dev.vars` | 仓库 secret |
-| `BETTER_AUTH_URL` | `.dev.vars` / vars | 仓库 secret（注入为 Worker var） |
+| `DATA_ENCRYPTION_KEY` | `wrangler secret put` 或 `.dev.vars` | 仓库 secret；必须独立于认证密钥 |
+| `DATA_ENCRYPTION_KEY_PREVIOUS` | 仅密钥轮换窗口配置 | 可选仓库 secret |
+| `BETTER_AUTH_URL` | `.dev.vars` / vars | 必需仓库 secret（CI 注入为 Worker var） |
+| `OAUTH_ALLOWED_HOSTS` | `.dev.vars` / vars，可为空 | 可选仓库 variable；自定义 OAuth 主机白名单 |
 | OAuth Client ID/Secret | 管理后台写入 D1 | 同上（不要再配置 `GITHUB_CLIENT_*`） |
 
 ## 管理后台能力
@@ -119,6 +125,8 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
 - `0009_rate_limit_and_passkey_unique.sql` — 验证限流桶与 Passkey credential 唯一约束
 - `0010_oauth_registration_intents.sql` — OAuth 注册 intent、state 绑定、邀请保留与消费状态
 - `0011_first_setup_claim.sql` — 首次管理员初始化单例状态机、原子认领与 credential 完成触发器
+- `0012_dns_sync_state.sql` — DNS pending 变更、同步状态、重试与安全错误码
+- `0013_user_deletion_jobs.sql` — 可恢复用户删除作业、进度与租约字段
 
 4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
 
@@ -126,8 +134,11 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
 example_com_CLOUDFLARE_API_TOKEN=...
 example_net_CLOUDFLARE_API_TOKEN=...
 DOMAINS=["example.com","example.net"]
-BETTER_AUTH_SECRET=openssl rand -base64 32
+BETTER_AUTH_SECRET=<独立生成的至少 32 字符随机值>
+DATA_ENCRYPTION_KEY=<另一份独立生成的至少 32 字符随机值>
+# DATA_ENCRYPTION_KEY_PREVIOUS=<仅轮换窗口使用的旧数据密钥>
 BETTER_AUTH_URL=http://localhost:8787
+# OAUTH_ALLOWED_HOSTS=accounts.example.com,*.login.example.net
 ```
 
 > 生产环境请用 `wrangler secret put ...` 注入密钥，不要写进 `wrangler.jsonc`。
@@ -149,54 +160,21 @@ pnpm wrangler dev
 
 ```txt
 src/
-  index.tsx                           # 路由组装入口
-  routes/
-    auth.tsx                          # 登录/注册/OAuth/setup
-    dns.tsx                           # 用户 DNS API 与删除
-    admin.tsx
-    settings.tsx                         # 个人设置                         # 管理后台
-  lib/
-    http.ts                           # 重定向/Cookie/CSV 等通用辅助
-    invite.ts                         # 邀请码校验与消费
-  auth.ts                             # better-auth + genericOAuth
-  services/
-    settings.ts                       # 全局设置（带短缓存）
-    dns-records.ts                    # DNS 记录与用户权限业务
-    invite-codes.ts                   # 邀请码
-    oauth-providers.ts                # OAuth CRUD / 模板 / genericOAuth 配置（带短缓存）
-    email-verification.ts             # 注册验证码哈希 + 待注册密码密封
-    request-cache.ts                  # settings / oauth 短缓存
-    cloudflare-dns.ts                 # Cloudflare DNS API
-    github.ts                         # GitHub 用户信息与天数校验
-    mailer.ts                         # Resend 发信
-  views/
-    LoginView.tsx / RegisterView.tsx
-    GitHubAgeRejectedView.tsx
-    AdminView.tsx
-    SettingsView.tsx
-    IndexView.tsx / SetupView.tsx / VerifyEmailView.tsx / Layout.tsx
-public/static/
-  main.js
-scripts/
-  ...
-.github/workflows/
-  deploy.yml
+  index.ts                             # Worker 与路由入口
+  auth.ts                              # better-auth + genericOAuth
+  routes/                              # 认证、页面、DNS、管理与个人设置路由
+  lib/                                 # API/CSRF/CSP、外部请求策略与页面 shell
+  services/                            # DNS、OAuth、邮件、限流、密钥和删除作业
+  styles/app.css                       # Tailwind 输入样式
+public/static/                         # 构建后的 CSS 与浏览器脚本
+scripts/                               # D1/域名部署辅助与迁移兼容校验
+migrations/                            # 0000_init.sql 至 0013_user_deletion_jobs.sql
+tests/                                 # Vitest 安全与业务回归测试
+.github/workflows/deploy.yml           # 固定版本 Actions 的生产部署流程
 docs/
   deploy-local.md
   deploy-github-actions.md
-migrations/
-  0000_init.sql
-  0001_admin.sql
-  0002_super_admin_and_limits.sql
-  0003_invite_codes.sql
-  0004_oauth_providers.sql
-  0005_oauth_unify_github.sql
-  0006_schema_hardening.sql
-  0007_passkey.sql
-  0008_numeric_user_ids.sql
-  0009_rate_limit_and_passkey_unique.sql
-  0010_oauth_registration_intents.sql
-  0011_first_setup_claim.sql
+  production-runbook.md
 ```
 
 ## 权限与限制摘要
@@ -206,7 +184,7 @@ migrations/
 - 邀请码仅在开启邀请注册后生效；生成权限限管理员与超级管理员
 - OAuth 应用保存在 D1 表 `oauth_provider`，运行时注入 better-auth `genericOAuth`
 - `dns_record.host_name` 与 `account(providerId, accountId)` 有唯一约束，避免重复绑定
-- 邮箱验证流程中的待注册密码不会明文落库（使用 `BETTER_AUTH_SECRET` 密封）
+- 邮箱验证流程中的待注册密码不会明文落库（使用独立 `DATA_ENCRYPTION_KEY` 密封；`BETTER_AUTH_SECRET` 仅用于兼容解密历史密文）
 
 ## 首次管理员初始化与隐私保护
 
