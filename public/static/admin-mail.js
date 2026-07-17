@@ -6,13 +6,13 @@
   function openModal(modal) {
     if (!modal) return;
     modal.classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
+    document.body.classList.add('overflow-hidden');
   }
 
   function closeModal(modal) {
     if (!modal) return;
     modal.classList.add('hidden');
-    document.body.style.overflow = '';
+    document.body.classList.remove('overflow-hidden');
   }
 
   var KEEP = '__KEEP__';
@@ -79,16 +79,30 @@
       card.innerHTML =
         '<div class="flex items-center justify-between gap-2">' +
           '<div class="text-xs font-semibold text-slate-400">账号 #' + (idx + 1) + (idx === 0 ? '（主账号）' : '') + '</div>' +
-          '<button type="button" data-remove="' + idx + '" class="text-xs text-rose-400 hover:text-rose-300 transition">删除</button>' +
+          '<button type="button" data-remove class="text-xs text-rose-400 hover:text-rose-300 transition">删除</button>' +
         '</div>' +
         '<div>' +
           '<label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">发件邮箱</label>' +
-          '<input data-from="' + idx + '" type="email" value="' + String(row.from || '').replace(/"/g, '&quot;') + '" placeholder="noreply@domain.com" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-md text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500" />' +
+          '<input data-from type="email" placeholder="noreply@domain.com" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-md text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500" />' +
         '</div>' +
         '<div>' +
           '<label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">API Key</label>' +
-          '<input data-key="' + idx + '" data-keep="' + (row.keep ? '1' : '0') + '" type="password" value="' + String(row.key || '').replace(/"/g, '&quot;') + '" placeholder="' + keyPlaceholder + '" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-md text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono" />' +
+          '<input data-key type="password" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-md text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono" />' +
         '</div>';
+      var removeButton = card.querySelector('[data-remove]');
+      var fromInput = card.querySelector('[data-from]');
+      var keyInput = card.querySelector('[data-key]');
+      if (removeButton) removeButton.setAttribute('data-remove', String(idx));
+      if (fromInput) {
+        fromInput.setAttribute('data-from', String(idx));
+        fromInput.value = String(row.from || '');
+      }
+      if (keyInput) {
+        keyInput.setAttribute('data-key', String(idx));
+        keyInput.setAttribute('data-keep', row.keep ? '1' : '0');
+        keyInput.value = String(row.key || '');
+        keyInput.placeholder = keyPlaceholder;
+      }
       listEl.appendChild(card);
     });
 

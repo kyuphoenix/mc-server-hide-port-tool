@@ -1,5 +1,10 @@
 import { getSettings, type ResendAccount } from './settings'
+import { fetchWithPolicy, readTextWithLimit } from '../lib/external-fetch'
 import type { MailExternalFailureCode } from '../lib/external-service-security'
+import {
+  sensitiveDataKeysFromEnv,
+  type SensitiveDataEnvironment
+} from './sensitive-data'
 
 export type MailSendFailure = {
   ok: false
@@ -11,6 +16,10 @@ export type MailSendFailure = {
 }
 
 export type MailSendResult = { ok: true } | MailSendFailure
+type MailBindings = SensitiveDataEnvironment & {
+  DB: D1Database
+}
+
 
 type MailTemplateInput = {
   title: string
@@ -140,7 +149,7 @@ async function sendWithAccount(
   account: ResendAccount,
   input: { toEmail: string; subject: string; html: string }
 ): Promise<{ ok: true } | { ok: false; status: number; retriable: boolean }> {
-  const res = await fetch('https://api.resend.com/emails', {
+  const res = await fetchWithPolicy('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${account.api_key}`,
@@ -152,11 +161,17 @@ async function sendWithAccount(
       subject: input.subject,
       html: input.html
     })
+  }, {
+    timeoutMs: 8_000,
+    retries: 0
   })
 
-  if (res.ok) return { ok: true }
+  if (res.ok) {
+    void res.body?.cancel().catch(() => undefined)
+    return { ok: true }
+  }
 
-  await res.text().catch(() => '')
+  await readTextWithLimit(res, 64 * 1024, 8_000).catch(() => '')
   return {
     ok: false,
     status: res.status,
@@ -165,7 +180,7 @@ async function sendWithAccount(
 }
 
 export async function sendResendEmail(
-  env: { DB: D1Database },
+  env: MailBindings,
   input: {
     toEmail: string
     subject: string
@@ -173,7 +188,7 @@ export async function sendResendEmail(
     ignoreEnabledFlag?: boolean
   }
 ): Promise<MailSendResult> {
-  const settings = await getSettings(env.DB)
+  const settings = await getSettings(env.DB, sensitiveDataKeysFromEnv(env))
   const accounts = settings.resend_accounts || []
 
   if (accounts.length === 0) {
@@ -230,7 +245,7 @@ export async function sendResendEmail(
 }
 
 export async function sendVerificationCode(
-  env: { DB: D1Database },
+  env: MailBindings,
   toEmail: string,
   code: string
 ): Promise<{ ok: boolean; message?: string }> {
@@ -252,7 +267,7 @@ export async function sendVerificationCode(
 }
 
 export async function sendTestEmail(
-  env: { DB: D1Database },
+  env: MailBindings,
   toEmail: string
 ): Promise<MailSendResult> {
   const subject = '[测试邮件] Minecraft 端口隐藏工具'

@@ -1,4 +1,11 @@
-import { hashPassword, symmetricDecrypt, symmetricEncrypt, verifyPassword } from 'better-auth/crypto'
+import { hashPassword, verifyPassword } from 'better-auth/crypto'
+import {
+  isSealedSensitiveValue,
+  openSensitiveValue,
+  sealSensitiveValue,
+  type SensitiveDataKeySource
+} from './sensitive-data'
+import { buildRateLimitKey } from './rate-limit'
 
 export type EmailVerificationRow = {
   id: string
@@ -11,7 +18,17 @@ export type EmailVerificationRow = {
   invite_code: string | null
 }
 
-const ENC_PREFIX = 'enc:v1:'
+export function generateVerificationCode(): string {
+  const range = 900_000
+  const maxUnbiased = Math.floor(0x1_0000_0000 / range) * range
+  const values = new Uint32Array(1)
+  let value = 0
+  do {
+    crypto.getRandomValues(values)
+    value = values[0]
+  } while (value >= maxUnbiased)
+  return String(100_000 + (value % range))
+}
 
 export async function hashVerificationCode(code: string): Promise<string> {
   return await hashPassword(code)
@@ -25,28 +42,23 @@ export async function verifyVerificationCode(code: string, codeHash: string): Pr
   }
 }
 
-/** Encrypt pending signup password with app secret. */
-export async function sealPendingPassword(secret: string | undefined, password: string): Promise<string> {
-  if (!secret) {
-    throw new Error('Cannot seal pending signup password: missing BETTER_AUTH_SECRET')
-  }
-  const cipher = await symmetricEncrypt({ key: secret, data: password })
-  return `${ENC_PREFIX}${cipher}`
+/** Encrypt a pending signup password with the independent data key. */
+export async function sealPendingPassword(
+  keys: SensitiveDataKeySource,
+  password: string
+): Promise<string> {
+  return await sealSensitiveValue(keys, password)
 }
 
-/** Decrypt pending signup password. */
-export async function openPendingPassword(secret: string | undefined, stored: string): Promise<string> {
-  if (!stored.startsWith(ENC_PREFIX)) {
-    throw new Error('Invalid sealed password format')
-  }
-  if (!secret) {
-    throw new Error('Cannot decrypt pending signup password: missing BETTER_AUTH_SECRET')
-  }
-  return await symmetricDecrypt({
-    key: secret,
-    data: stored.slice(ENC_PREFIX.length)
-  })
+/** Decrypt a pending signup password, allowing the previous key during rotation. */
+export async function openPendingPassword(
+  keys: SensitiveDataKeySource,
+  stored: string
+): Promise<string> {
+  if (!isSealedSensitiveValue(stored)) throw new Error('Invalid sealed password format')
+  return await openSensitiveValue(keys, stored)
 }
+
 
 export async function upsertEmailVerification(
   db: D1Database,
@@ -108,11 +120,30 @@ export async function purgeExpiredEmailVerifications(db: D1Database, now = Date.
 }
 
 const VERIFY_FAIL_WINDOW_MS = 10 * 60 * 1000
-const VERIFY_FAIL_MAX = 8
-const RATE_SCOPE = 'email_verify_fail'
+const VERIFY_FAIL_PER_IP_MAX = 8
+const VERIFY_FAIL_GLOBAL_MAX = 24
+const RATE_SCOPE_IP = 'email_verify_fail'
+const RATE_SCOPE_GLOBAL = 'email_verify_fail_global'
 
-function verifyFailKey(email: string, ip: string | null | undefined): string {
-  return `${RATE_SCOPE}:${email.toLowerCase()}|${ip || 'unknown'}`
+type VerificationLimit = {
+  key: string
+  limit: number
+}
+
+async function verificationLimits(
+  email: string,
+  ip: string | null | undefined
+): Promise<VerificationLimit[]> {
+  return [
+    {
+      key: await buildRateLimitKey(RATE_SCOPE_IP, `${email}|${ip || 'unknown'}`),
+      limit: VERIFY_FAIL_PER_IP_MAX
+    },
+    {
+      key: await buildRateLimitKey(RATE_SCOPE_GLOBAL, email),
+      limit: VERIFY_FAIL_GLOBAL_MAX
+    }
+  ]
 }
 
 export async function clearVerificationFailures(
@@ -120,10 +151,10 @@ export async function clearVerificationFailures(
   email: string,
   ip?: string | null
 ): Promise<void> {
-  await db
-    .prepare('DELETE FROM rate_limit_bucket WHERE key = ?')
-    .bind(verifyFailKey(email, ip))
-    .run()
+  const limits = await verificationLimits(email, ip)
+  await db.batch(limits.map(({ key }) =>
+    db.prepare('DELETE FROM rate_limit_bucket WHERE key = ?').bind(key)
+  ))
 }
 
 export async function recordVerificationFailure(
@@ -131,54 +162,42 @@ export async function recordVerificationFailure(
   email: string,
   ip?: string | null
 ): Promise<{ limited: boolean; remaining: number; retryAfterSec: number }> {
-  const key = verifyFailKey(email, ip)
+  const limits = await verificationLimits(email, ip)
   const now = Date.now()
-  const current = await db
-    .prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?')
-    .bind(key)
-    .first<{ count: number; reset_at: number }>()
+  const resetAt = now + VERIFY_FAIL_WINDOW_MS
+  const results = await db.batch(limits.map(({ key }) => db.prepare(
+    `INSERT INTO rate_limit_bucket (key, count, reset_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       count = CASE
+         WHEN rate_limit_bucket.reset_at <= ? THEN 1
+         ELSE rate_limit_bucket.count + 1
+       END,
+       reset_at = CASE
+         WHEN rate_limit_bucket.reset_at <= ? THEN excluded.reset_at
+         ELSE rate_limit_bucket.reset_at
+       END
+     RETURNING count, reset_at`
+  ).bind(key, resetAt, now, now)))
 
-  if (!current || now >= Number(current.reset_at)) {
-    const resetAt = now + VERIFY_FAIL_WINDOW_MS
-    await db
-      .prepare(
-        `INSERT INTO rate_limit_bucket (key, count, reset_at)
-         VALUES (?, 1, ?)
-         ON CONFLICT(key) DO UPDATE SET
-           count = 1,
-           reset_at = excluded.reset_at`
-      )
-      .bind(key, resetAt)
-      .run()
+  const states = results.map((result, index) => {
+    const row = result.results?.[0] as { count?: number; reset_at?: number } | undefined
+    if (!row) throw new Error('verification_rate_limit_update_failed')
+    const count = Number(row.count)
+    const effectiveResetAt = Number(row.reset_at)
     return {
-      limited: false,
-      remaining: VERIFY_FAIL_MAX - 1,
-      retryAfterSec: Math.ceil(VERIFY_FAIL_WINDOW_MS / 1000)
+      limited: count >= limits[index]!.limit,
+      remaining: Math.max(0, limits[index]!.limit - count),
+      retryAfterSec: Math.max(1, Math.ceil((effectiveResetAt - now) / 1000))
     }
-  }
-
-  // Atomic increment for an active window. If concurrent writers race, the higher count wins.
-  await db
-    .prepare(
-      `UPDATE rate_limit_bucket
-       SET count = count + 1
-       WHERE key = ? AND reset_at > ?`
-    )
-    .bind(key, now)
-    .run()
-
-  const updated = await db
-    .prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?')
-    .bind(key)
-    .first<{ count: number; reset_at: number }>()
-
-  const count = Math.max(1, Number(updated?.count ?? current.count + 1))
-  const resetAt = Number(updated?.reset_at ?? current.reset_at)
-  const remaining = Math.max(0, VERIFY_FAIL_MAX - count)
+  })
+  const blocked = states.filter((state) => state.limited)
   return {
-    limited: count >= VERIFY_FAIL_MAX,
-    remaining,
-    retryAfterSec: Math.max(1, Math.ceil((resetAt - now) / 1000))
+    limited: blocked.length > 0,
+    remaining: Math.min(...states.map((state) => state.remaining)),
+    retryAfterSec: blocked.length > 0
+      ? Math.max(...blocked.map((state) => state.retryAfterSec))
+      : Math.max(...states.map((state) => state.retryAfterSec))
   }
 }
 
@@ -187,26 +206,35 @@ export async function isVerificationRateLimited(
   email: string,
   ip?: string | null
 ): Promise<{ limited: boolean; retryAfterSec: number }> {
-  const key = verifyFailKey(email, ip)
+  const limits = await verificationLimits(email, ip)
   const now = Date.now()
-  const current = await db
-    .prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?')
-    .bind(key)
-    .first<{ count: number; reset_at: number }>()
+  const results = await db.batch(limits.map(({ key }) =>
+    db.prepare('SELECT count, reset_at FROM rate_limit_bucket WHERE key = ?').bind(key)
+  ))
 
-  if (!current || now >= Number(current.reset_at)) {
-    if (current && now >= Number(current.reset_at)) {
-      await db.prepare('DELETE FROM rate_limit_bucket WHERE key = ?').bind(key).run()
+  const blockedRetryAfter: number[] = []
+  const expiredKeys: string[] = []
+  results.forEach((result, index) => {
+    const row = result.results?.[0] as { count?: number; reset_at?: number } | undefined
+    if (!row) return
+    const resetAt = Number(row.reset_at)
+    if (now >= resetAt) {
+      expiredKeys.push(limits[index]!.key)
+      return
     }
-    return { limited: false, retryAfterSec: 0 }
+    if (Number(row.count) >= limits[index]!.limit) {
+      blockedRetryAfter.push(Math.max(1, Math.ceil((resetAt - now) / 1000)))
+    }
+  })
+
+  if (expiredKeys.length > 0) {
+    await db.batch(expiredKeys.map((key) =>
+      db.prepare('DELETE FROM rate_limit_bucket WHERE key = ? AND reset_at <= ?').bind(key, now)
+    ))
   }
-  if (Number(current.count) < VERIFY_FAIL_MAX) {
-    return { limited: false, retryAfterSec: 0 }
-  }
-  return {
-    limited: true,
-    retryAfterSec: Math.max(1, Math.ceil((Number(current.reset_at) - now) / 1000))
-  }
+  return blockedRetryAfter.length > 0
+    ? { limited: true, retryAfterSec: Math.max(...blockedRetryAfter) }
+    : { limited: false, retryAfterSec: 0 }
 }
 
 /** Opportunistic cleanup of expired rate-limit rows. */

@@ -1,3 +1,5 @@
+export type DnsSyncStatus = 'creating' | 'active' | 'updating' | 'error'
+
 export type DnsRecordRow = {
   id: string
   user_id: string | null
@@ -10,6 +12,12 @@ export type DnsRecordRow = {
   target_record_id: string
   srv_record_id: string | null
   created_at: number
+  sync_status: DnsSyncStatus
+  sync_error_code: string | null
+  sync_updated_at: number
+  pending_server_address: string | null
+  pending_port: number | null
+  pending_target_type: string | null
 }
 
 export function genId(): string {
@@ -24,11 +32,71 @@ export async function listRecordsByUser(db: D1Database, userId: string): Promise
   return result.results ?? []
 }
 
-export async function listAllRecords(db: D1Database): Promise<DnsRecordRow[]> {
+export async function listRecordsByUserBatch(
+  db: D1Database,
+  userId: string,
+  limit: number
+): Promise<DnsRecordRow[]> {
+  const safeLimit = Math.max(1, Math.min(25, Math.floor(limit) || 1))
   const result = await db
-    .prepare('SELECT * FROM dns_record ORDER BY created_at DESC')
+    .prepare('SELECT * FROM dns_record WHERE user_id = ? ORDER BY created_at ASC, id ASC LIMIT ?')
+    .bind(userId, safeLimit)
     .all<DnsRecordRow>()
   return result.results ?? []
+}
+
+export async function listRecentRecordsByUser(
+  db: D1Database,
+  userId: string,
+  limit = 500
+): Promise<DnsRecordRow[]> {
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit) || 500))
+  const result = await db
+    .prepare('SELECT * FROM dns_record WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
+    .bind(userId, safeLimit)
+    .all<DnsRecordRow>()
+  return result.results ?? []
+}
+
+export async function listAllRecords(db: D1Database, limit = 500): Promise<DnsRecordRow[]> {
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit) || 500))
+  const result = await db
+    .prepare('SELECT * FROM dns_record ORDER BY created_at DESC LIMIT ?')
+    .bind(safeLimit)
+    .all<DnsRecordRow>()
+  return result.results ?? []
+}
+
+export type PageResult<T> = {
+  items: T[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}
+
+function normalizePage(value: number | undefined): number {
+  return Math.max(1, Math.floor(Number(value)) || 1)
+}
+
+function normalizePageSize(value: number | undefined, fallback = 50): number {
+  return Math.max(1, Math.min(100, Math.floor(Number(value)) || fallback))
+}
+
+export async function listAllRecordsPage(
+  db: D1Database,
+  opts: { page?: number; pageSize?: number } = {}
+): Promise<PageResult<DnsRecordRow>> {
+  const pageSize = normalizePageSize(opts.pageSize)
+  const countRow = await db.prepare('SELECT COUNT(*) AS count FROM dns_record').first<{ count: number }>()
+  const total = Number(countRow?.count || 0)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const page = Math.min(normalizePage(opts.page), totalPages)
+  const result = await db
+    .prepare('SELECT * FROM dns_record ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?')
+    .bind(pageSize, (page - 1) * pageSize)
+    .all<DnsRecordRow>()
+  return { items: result.results ?? [], total, page, pageSize, totalPages }
 }
 
 export async function findRecordById(db: D1Database, id: string): Promise<DnsRecordRow | null> {
@@ -47,7 +115,7 @@ export async function findRecordByHostName(
 
 export async function insertRecord(
   db: D1Database,
-  record: Omit<DnsRecordRow, 'id' | 'created_at'> & { id?: string }
+  record: Omit<DnsRecordRow, 'id' | 'created_at' | 'sync_status' | 'sync_error_code' | 'sync_updated_at' | 'pending_server_address' | 'pending_port' | 'pending_target_type'> & { id?: string }
 ): Promise<DnsRecordRow> {
   const id = record.id ?? genId()
   const created_at = Date.now()
@@ -72,7 +140,92 @@ export async function insertRecord(
     )
     .run()
 
-  return { ...record, id, created_at }
+  return (await findRecordById(db, id))!
+}
+
+export async function insertPendingRecord(
+  db: D1Database,
+  record: Omit<DnsRecordRow, 'id' | 'created_at' | 'target_record_id' | 'srv_record_id' | 'sync_status' | 'sync_error_code' | 'sync_updated_at' | 'pending_server_address' | 'pending_port' | 'pending_target_type'> & { id?: string }
+): Promise<DnsRecordRow> {
+  const id = record.id ?? genId()
+  const now = Date.now()
+  await db.prepare(
+    `INSERT INTO dns_record
+      (id, user_id, root_domain, subdomain, host_name, server_address, port, target_type,
+       target_record_id, srv_record_id, created_at, sync_status, sync_error_code, sync_updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', NULL, ?, 'creating', NULL, ?)`
+  ).bind(
+    id,
+    record.user_id,
+    record.root_domain,
+    record.subdomain,
+    record.host_name,
+    record.server_address,
+    record.port,
+    record.target_type,
+    now,
+    now
+  ).run()
+  return (await findRecordById(db, id))!
+}
+
+export async function beginRecordUpdate(
+  db: D1Database,
+  id: string,
+  desired: { server_address: string; port: number; target_type: string }
+): Promise<DnsRecordRow | null> {
+  await db.prepare(
+    `UPDATE dns_record
+     SET sync_status = 'updating', sync_error_code = NULL, sync_updated_at = ?,
+         pending_server_address = ?, pending_port = ?, pending_target_type = ?
+     WHERE id = ?`
+  ).bind(Date.now(), desired.server_address, desired.port, desired.target_type, id).run()
+  return await findRecordById(db, id)
+}
+
+export async function persistRecordRemoteIds(
+  db: D1Database,
+  id: string,
+  patch: { target_record_id?: string; srv_record_id?: string | null }
+): Promise<void> {
+  const row = await findRecordById(db, id)
+  if (!row) throw new Error('dns_record_not_found')
+  await db.prepare(
+    `UPDATE dns_record SET target_record_id = ?, srv_record_id = ?, sync_updated_at = ? WHERE id = ?`
+  ).bind(
+    patch.target_record_id === undefined ? row.target_record_id : patch.target_record_id,
+    patch.srv_record_id === undefined ? row.srv_record_id : patch.srv_record_id,
+    Date.now(),
+    id
+  ).run()
+}
+
+export async function markRecordSyncError(db: D1Database, id: string, errorCode: string): Promise<void> {
+  await db.prepare(
+    `UPDATE dns_record SET sync_status = 'error', sync_error_code = ?, sync_updated_at = ? WHERE id = ?`
+  ).bind(errorCode.slice(0, 64), Date.now(), id).run()
+}
+
+export async function finalizeRecordSync(
+  db: D1Database,
+  id: string,
+  patch?: { server_address: string; port: number; target_type: string }
+): Promise<DnsRecordRow | null> {
+  const row = await findRecordById(db, id)
+  if (!row) return null
+  const desired = patch ?? {
+    server_address: row.pending_server_address ?? row.server_address,
+    port: row.pending_port ?? row.port,
+    target_type: row.pending_target_type ?? row.target_type
+  }
+  await db.prepare(
+    `UPDATE dns_record
+     SET server_address = ?, port = ?, target_type = ?, sync_status = 'active',
+         sync_error_code = NULL, sync_updated_at = ?, pending_server_address = NULL,
+         pending_port = NULL, pending_target_type = NULL
+     WHERE id = ?`
+  ).bind(desired.server_address, desired.port, desired.target_type, Date.now(), id).run()
+  return await findRecordById(db, id)
 }
 
 
@@ -121,16 +274,17 @@ export type UserSearchRole = 'all' | 'user' | 'admin' | 'super'
 export type UserSearchOptions = {
   q?: string
   role?: UserSearchRole
+  limit?: number
 }
 
-/** Search users by plaintext email/name/id; role filter is applied in SQL. */
-export async function searchUsers(
-  db: D1Database,
-  opts: UserSearchOptions = {}
-): Promise<UserListRow[]> {
+export type UserSearchPageOptions = Omit<UserSearchOptions, 'limit'> & {
+  page?: number
+  pageSize?: number
+}
+
+function userSearchWhere(opts: UserSearchPageOptions): { whereSql: string; binds: unknown[] } {
   const q = String(opts.q ?? '').trim()
   const role = opts.role ?? 'all'
-
   const where: string[] = []
   const binds: unknown[] = []
 
@@ -143,20 +297,56 @@ export async function searchUsers(
   }
 
   if (q) {
-    // Email is stored in plaintext; search against DB then mask on the way out.
+    // Email is searched in D1 and masked before the result crosses the API boundary.
     where.push('(email = ? OR lower(email) LIKE ? OR lower(name) LIKE ? OR id = ? OR id LIKE ?)')
     const like = '%' + q.toLowerCase() + '%'
     binds.push(q, like, like, q, like)
   }
 
-  const sql =
-    'SELECT id, name, email, emailVerified, role, super_admin, record_limit, createdAt FROM user' +
-    (where.length ? ' WHERE ' + where.join(' AND ') : '') +
-    ' ORDER BY "createdAt" ASC'
+  return {
+    whereSql: where.length ? ' WHERE ' + where.join(' AND ') : '',
+    binds
+  }
+}
 
-  const stmt = db.prepare(sql)
-  const r = binds.length ? await stmt.bind(...binds).all<UserListRow>() : await stmt.all<UserListRow>()
-  return r.results ?? []
+export async function searchUsersPage(
+  db: D1Database,
+  opts: UserSearchPageOptions = {}
+): Promise<PageResult<UserListRow>> {
+  const pageSize = normalizePageSize(opts.pageSize)
+  const { whereSql, binds } = userSearchWhere(opts)
+  const countRow = await db.prepare(
+    'SELECT COUNT(*) AS count FROM user' + whereSql
+  ).bind(...binds).first<{ count: number }>()
+  const total = Number(countRow?.count || 0)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const page = Math.min(normalizePage(opts.page), totalPages)
+  const rows = await db.prepare(
+    'SELECT id, name, email, emailVerified, role, super_admin, record_limit, createdAt FROM user' +
+    whereSql + ' ORDER BY "createdAt" ASC, id ASC LIMIT ? OFFSET ?'
+  ).bind(...binds, pageSize, (page - 1) * pageSize).all<UserListRow>()
+  return { items: rows.results ?? [], total, page, pageSize, totalPages }
+}
+
+/** Search users by plaintext email/name/id; role filter is applied in SQL. */
+export async function searchUsers(
+  db: D1Database,
+  opts: UserSearchOptions = {}
+): Promise<UserListRow[]> {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(opts.limit)) || 200))
+  const result = await searchUsersPage(db, {
+    q: opts.q,
+    role: opts.role,
+    page: 1,
+    pageSize: Math.min(limit, 100)
+  })
+  if (limit <= 100 || result.total <= result.items.length) return result.items
+
+  const pages = [result.items]
+  for (let page = 2; page <= Math.ceil(Math.min(limit, result.total) / 100); page += 1) {
+    pages.push((await searchUsersPage(db, { q: opts.q, role: opts.role, page, pageSize: 100 })).items)
+  }
+  return pages.flat().slice(0, limit)
 }
 
 export type UserListRow = {
@@ -256,15 +446,18 @@ export async function deleteUserCascade(db: D1Database, id: string): Promise<voi
     .bind(id)
     .first<{ email: string }>()
 
-  await db.prepare('DELETE FROM dns_record WHERE user_id = ?').bind(id).run()
-  await db.prepare('DELETE FROM session WHERE userId = ?').bind(id).run()
-  await db.prepare('DELETE FROM account WHERE userId = ?').bind(id).run()
-  await db.prepare('DELETE FROM passkey WHERE userId = ?').bind(id).run()
-  // Keep invite history, but detach FK references that would block user deletion.
-  await db.prepare('UPDATE invite_code SET used_by = NULL WHERE used_by = ?').bind(id).run()
-  await db.prepare('DELETE FROM invite_code WHERE created_by = ? AND used_by IS NULL').bind(id).run()
-  if (user?.email) {
-    await db.prepare('DELETE FROM email_verification WHERE email = ?').bind(user.email).run()
-  }
-  await db.prepare('DELETE FROM user WHERE id = ?').bind(id).run()
+  const statements = [
+    db.prepare('DELETE FROM dns_record WHERE user_id = ?').bind(id),
+    db.prepare('DELETE FROM session WHERE userId = ?').bind(id),
+    db.prepare('DELETE FROM account WHERE userId = ?').bind(id),
+    db.prepare('DELETE FROM passkey WHERE userId = ?').bind(id),
+    // Keep invite history, but detach FK references that would block user deletion.
+    db.prepare('UPDATE invite_code SET used_by = NULL WHERE used_by = ?').bind(id),
+    db.prepare('DELETE FROM invite_code WHERE created_by = ? AND used_by IS NULL').bind(id),
+    ...(user?.email
+      ? [db.prepare('DELETE FROM email_verification WHERE email = ?').bind(user.email)]
+      : []),
+    db.prepare('DELETE FROM user WHERE id = ?').bind(id)
+  ]
+  await db.batch(statements)
 }

@@ -7,6 +7,12 @@ import {
   type OAuthProviderRow
 } from './services/oauth-providers'
 import { getSettings } from './services/settings'
+import {
+  assertSensitiveDataConfiguration,
+  sensitiveDataKeysFromEnv,
+  type SensitiveDataEnvironment,
+  type SensitiveDataKeySource
+} from './services/sensitive-data'
 import { allocateNextUserId } from './services/user-ids'
 import { readGenericOAuthCallback } from './lib/better-auth-oauth-context'
 import {
@@ -22,11 +28,61 @@ import {
   FirstSetupError
 } from './services/first-setup'
 
-export type AuthBindings = {
+export const OAUTH_ACCOUNT_LINKING_ALLOW_DIFFERENT_EMAILS = false
+
+export type AuthBindings = SensitiveDataEnvironment & {
   DB: D1Database
   BETTER_AUTH_SECRET?: string
   APP_NAME?: string
   BETTER_AUTH_URL?: string
+  OAUTH_ALLOWED_HOSTS?: string
+}
+
+const BETTER_AUTH_PUBLIC_DEFAULT_SECRET = 'better-auth-secret-12345678901234567890'
+const MIN_AUTH_SECRET_LENGTH = 32
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+}
+
+export function assertAuthConfiguration(env: AuthBindings): {
+  secret: string
+  baseURL: string
+} {
+  const secret = String(env.BETTER_AUTH_SECRET ?? '').trim()
+  if (
+    secret.length < MIN_AUTH_SECRET_LENGTH ||
+    secret === BETTER_AUTH_PUBLIC_DEFAULT_SECRET
+  ) {
+    throw new Error('BETTER_AUTH_SECRET must be a private random value of at least 32 characters')
+  }
+
+  const rawBaseURL = String(env.BETTER_AUTH_URL ?? '').trim()
+  let parsed: URL
+  try {
+    parsed = new URL(rawBaseURL)
+  } catch {
+    throw new Error('BETTER_AUTH_URL must be an absolute HTTPS origin')
+  }
+
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.pathname !== '/' ||
+    (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopbackHostname(parsed.hostname)))
+  ) {
+    throw new Error('BETTER_AUTH_URL must be an HTTPS origin (HTTP is allowed only for loopback development)')
+  }
+
+  assertSensitiveDataConfiguration(env)
+
+  return {
+    secret,
+    baseURL: parsed.origin
+  }
 }
 
 export type Auth = ReturnType<typeof betterAuth>
@@ -45,11 +101,14 @@ const rejectFirstSetupGuard = (error: unknown): never => {
   throw new APIError('UNPROCESSABLE_ENTITY', { code, message: code })
 }
 
-async function resolveOAuthSignupPolicy(db: D1Database): Promise<{
+async function resolveOAuthSignupPolicy(
+  db: D1Database,
+  sensitiveKeys: SensitiveDataKeySource
+): Promise<{
   disableSignUp: boolean
   disableImplicitSignUp: boolean
 }> {
-  const settings = await getSettings(db)
+  const settings = await getSettings(db, sensitiveKeys)
   // OAuth new-account creation is only allowed when open registration is enabled
   // and mode is oauth/both. Invite requirement is enforced in app routes for new users.
   const oauthSignupAllowed =
@@ -87,11 +146,17 @@ export async function createAuth(
   oauthProviders?: OAuthProviderRow[],
   creationContext: AuthCreationContext = {}
 ) {
+  const authConfiguration = assertAuthConfiguration(env)
+  const sensitiveKeys = sensitiveDataKeysFromEnv(env)
   const providers =
-    oauthProviders ?? (await listEnabledOAuthProviders(env.DB).catch(() => [] as OAuthProviderRow[]))
+    oauthProviders ?? (await listEnabledOAuthProviders(
+      env.DB,
+      sensitiveKeys,
+      env.OAUTH_ALLOWED_HOSTS
+    ).catch(() => [] as OAuthProviderRow[]))
 
   // Public email signup is blocked at the /api/auth/* edge; app routes call signUpEmail server-side.
-  const oauthSignupPolicy = await resolveOAuthSignupPolicy(env.DB).catch(() => ({
+  const oauthSignupPolicy = await resolveOAuthSignupPolicy(env.DB, sensitiveKeys).catch(() => ({
     // Fail closed if settings cannot be loaded.
     disableSignUp: true,
     disableImplicitSignUp: true
@@ -100,7 +165,9 @@ export async function createAuth(
     toGenericOAuthConfig(p, env.DB, {
       disableSignUp: oauthSignupPolicy.disableSignUp,
       disableImplicitSignUp: oauthSignupPolicy.disableImplicitSignUp
-    })
+    },
+    sensitiveKeys,
+    env.OAUTH_ALLOWED_HOSTS)
   )
   const passkeyRp = resolvePasskeyRp(env)
 
@@ -121,8 +188,8 @@ export async function createAuth(
 
   return betterAuth({
     appName: env.APP_NAME || 'hide-port-tool',
-    baseURL: env.BETTER_AUTH_URL,
-    secret: env.BETTER_AUTH_SECRET,
+    baseURL: authConfiguration.baseURL,
+    secret: authConfiguration.secret,
     // Better Auth logs raw hook errors and stacks by default. App-owned security
     // events below are allowlisted and preserve only a fixed machine code/stage.
     logger: { disabled: true },
@@ -222,14 +289,15 @@ export async function createAuth(
       }
     },
     session: {
-      // 设置页添加 Passkey / 解绑账号会走 fresh session 校验；关闭以避免长会话无法操作
-      freshAge: 0
+      // Require recent authentication for destructive account and passkey operations.
+      freshAge: 15 * 60
     },
     account: {
+      encryptOAuthTokens: true,
       accountLinking: {
         enabled: true,
-        // OAuth providers often supply synthetic / different emails; allow binding anyway.
-        allowDifferentEmails: true
+        // Cross-email linking requires a separate explicit reauthentication design.
+        allowDifferentEmails: OAUTH_ACCOUNT_LINKING_ALLOW_DIFFERENT_EMAILS
       }
     },
     user: {

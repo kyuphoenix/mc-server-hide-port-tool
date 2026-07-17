@@ -40,6 +40,7 @@ async function setup(
   const env: AuthBindings = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App'
   }
@@ -251,9 +252,9 @@ describe('Better Auth OAuth registration hooks', { timeout: 30_000 }, () => {
     expect(await rowCount(db, 'session')).toBe(2)
   })
 
-  it('allows auth.api.oAuth2LinkAccount callbacks without a registration intent', async () => {
+  it('allows same-email auth.api.oAuth2LinkAccount callbacks without a registration intent', async () => {
     const { auth, db } = await setup()
-    mockOAuthProviderFetch()
+    mockOAuthProviderFetch({ email: 'link-user@example.test' })
     const signup = await auth.api.signUpEmail({
       body: {
         name: 'Link User',
@@ -295,6 +296,50 @@ describe('Better Auth OAuth registration hooks', { timeout: 30_000 }, () => {
       'SELECT userId FROM account WHERE providerId = ? AND accountId = ?'
     ).bind('fixture', 'provider-user-1').first<{ userId: string }>()
     expect(account?.userId).toBe(signup.user.id)
+  })
+
+  it('rejects OAuth account linking when the provider email differs', async () => {
+    const { auth, db } = await setup()
+    mockOAuthProviderFetch({ email: 'different-user@example.test' })
+    await auth.api.signUpEmail({
+      body: {
+        name: 'Link User',
+        email: 'link-user@example.test',
+        password: 'password123'
+      }
+    })
+    const signIn = await auth.api.signInEmail({
+      headers: sameOriginJsonHeaders(),
+      body: {
+        email: 'link-user@example.test',
+        password: 'password123'
+      },
+      asResponse: true
+    })
+    const sessionCookies = cookiesFromHeaders(signIn.headers)
+    const linkResponse = await auth.api.oAuth2LinkAccount({
+      headers: new Headers({ cookie: sessionCookies }),
+      body: {
+        providerId: 'fixture',
+        callbackURL: '/linked',
+        errorCallbackURL: '/link-error'
+      },
+      asResponse: true
+    })
+    const linkBody = await linkResponse.json() as { url: string }
+    const state = new URL(linkBody.url).searchParams.get('state') ?? ''
+    const response = await callback(
+      auth,
+      state,
+      mergeCookieHeaders(sessionCookies, cookiesFromHeaders(linkResponse.headers))
+    )
+
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toContain('/link-error')
+    expect(await db.prepare(
+      'SELECT userId FROM account WHERE providerId = ? AND accountId = ?'
+    ).bind('fixture', 'provider-user-1').first()).toBeNull()
+    expect(await rowCount(db, 'user')).toBe(1)
   })
 
   it('keeps the invite consumed when Better Auth 1.6.23 fails account insertion after user hooks', async () => {

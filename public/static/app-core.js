@@ -114,12 +114,11 @@ export function showToast(message, type = 'success') {
       : type === 'info'
         ? 'border-sky-500/30 bg-sky-950/90 text-sky-100'
         : 'border-emerald-500/30 bg-emerald-950/90 text-emerald-100';
-  el.className = `pointer-events-auto rounded-xl border px-4 py-3 text-sm shadow-xl backdrop-blur ${tone}`;
+  el.className = `pointer-events-auto rounded-xl border px-4 py-3 text-sm shadow-xl backdrop-blur transition-opacity duration-200 ${tone}`;
   el.textContent = message;
   root.appendChild(el);
   window.setTimeout(() => {
-    el.style.opacity = '0';
-    el.style.transition = 'opacity 200ms ease';
+    el.classList.add('opacity-0');
     window.setTimeout(() => el.remove(), 220);
   }, 2800);
 }

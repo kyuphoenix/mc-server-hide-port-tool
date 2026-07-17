@@ -2,14 +2,11 @@ import type { Hono } from 'hono'
 import { createAuth, isSuperAdminUser, requireAdmin } from '../auth'
 import { getSettings, updateSettings, type Settings } from '../services/settings'
 import {
-  deleteUserCascade,
   findRecordById,
   findUserById,
   hasUnlimitedDnsLimits,
   isSuperAdmin,
-  listAllUsers,
-  listRecordsByUser,
-  searchUsers,
+  searchUsersPage,
   type UserSearchRole,
   setUserRecordLimit,
   setUserRole
@@ -27,6 +24,11 @@ import {
   updateOAuthProvider
 } from '../services/oauth-providers'
 import { deleteRecordAndCloudflare, toDnsFailureEvent, type Bindings } from '../services/cloudflare-dns'
+import {
+  ensureUserDeletionJob,
+  findUserDeletionJob,
+  processUserDeletionBatch
+} from '../services/user-deletion'
 import { splitCsv, withoutSetCookieHeaders } from '../lib/http'
 import {
   apiErr,
@@ -35,6 +37,7 @@ import {
   requireJsonMutation
 } from '../lib/api'
 import { maskUsersForAdmin } from '../lib/privacy'
+import { findUserIdByEmail } from '../lib/invite'
 import {
   DNS_GENERIC_SAFE_MESSAGE,
   MAIL_TEST_SUCCESS_MESSAGE,
@@ -42,6 +45,7 @@ import {
   logMailExternalServiceFailure,
   safeMailTestClientMessage
 } from '../lib/external-service-security'
+import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
 
 function asBool(v: unknown): boolean {
   if (typeof v === 'boolean') return v
@@ -98,9 +102,10 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (denied) return denied
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return apiErr(c, "无权限", 403)
+    if (!isSuperAdminUser(admin)) return apiErr(c, "仅超级管理员可修改系统设置", 403)
 
     const body = await readJsonBody(c)
-    const current = await getSettings(c.env.DB)
+    const current = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     const mode = String(body.registration_mode ?? 'email')
     const modeNorm: 'email' | 'oauth' | 'both' =
       mode === 'oauth' ? 'oauth' : mode === 'both' ? 'both' : 'email'
@@ -124,7 +129,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       min_subdomain_length: Math.max(0, Number(body.min_subdomain_length ?? 0) || 0)
     }
 
-    await updateSettings(c.env.DB, patch)
+    await updateSettings(c.env.DB, patch, sensitiveDataKeysFromEnv(c.env))
     return apiOk(c, undefined, { message: "设置已保存" })
   })
 
@@ -138,12 +143,19 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const role: UserSearchRole =
       roleRaw === 'user' || roleRaw === 'admin' || roleRaw === 'super' ? roleRaw : 'all'
 
-    // Search plaintext in DB, then force-mask email before returning to admin UI.
-    const users = await searchUsers(c.env.DB, { q, role })
+    const page = Math.max(1, Math.floor(Number(c.req.query('page'))) || 1)
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(c.req.query('page_size'))) || 50))
+    // Search plaintext in D1, then force-mask email before returning to the admin UI.
+    const result = await searchUsersPage(c.env.DB, { q, role, page, pageSize })
     return apiOk(c, {
-      users: maskUsersForAdmin(users),
+      users: maskUsersForAdmin(result.items),
       query: { q, role },
-      total: users.length
+      pagination: {
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+        totalPages: result.totalPages
+      }
     })
   })
 
@@ -170,27 +182,49 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/api/admin/users/:id/delete', async (c) => {
     const denied = await requireJsonMutation(c)
     if (denied) return denied
-    const admin = await requireAdmin(c.env, c.req.raw.headers)
-    if (!admin) return apiErr(c, "无权限", 403)
+    const adminUser = await requireAdmin(c.env, c.req.raw.headers)
+    if (!adminUser) return apiErr(c, "无权限", 403)
 
     const id = c.req.param('id')
-    if (id === admin.id) return apiErr(c, "不能删除自己")
+    if (id === adminUser.id) return apiErr(c, "不能删除自己")
+
+    let job = await findUserDeletionJob(c.env.DB, id)
     const target = await findUserById(c.env.DB, id)
-    if (!target) return apiErr(c, "用户不存在", 404)
-    if (target.role === 'admin' && !isSuperAdminUser(admin)) {
+    if (!target && !job) return apiErr(c, "用户不存在", 404)
+    if (target?.role === 'admin' && !isSuperAdminUser(adminUser)) {
       return apiErr(c, "仅超级管理员可删除管理员", 403)
     }
-    if (await isSuperAdmin(c.env.DB, id)) return apiErr(c, "不能删除超级管理员", 403)
+    if (target && await isSuperAdmin(c.env.DB, id)) {
+      return apiErr(c, "不能删除超级管理员", 403)
+    }
+
+    if (target && job?.status === 'completed') {
+      await c.env.DB.prepare('DELETE FROM user_deletion_job WHERE user_id = ?').bind(id).run()
+      job = null
+    }
+    job = job ?? await ensureUserDeletionJob(c.env.DB, id, adminUser.id)
 
     try {
-      const records = await listRecordsByUser(c.env.DB, id)
-      for (const r of records) {
-        await deleteRecordAndCloudflare(c.env, r)
+      const progress = await processUserDeletionBatch(c.env, id)
+      if (progress.status === 'failed') {
+        return apiErr(c, DNS_GENERIC_SAFE_MESSAGE, 503, {
+          code: 'USER_DELETION_RETRY_REQUIRED',
+          data: progress
+        })
       }
-      await deleteUserCascade(c.env.DB, id)
-      return apiOk(c, undefined, { message: "用户已删除" })
-    } catch (err) {
-      logDnsExternalServiceFailure(toDnsFailureEvent(err, 'record_delete'))
+      if (progress.status !== 'completed') {
+        return apiOk(c, progress, {
+          message: "用户删除正在处理",
+          status: 202
+        })
+      }
+      return apiOk(c, progress, { message: "用户已删除" })
+    } catch {
+      console.error(JSON.stringify({
+        event: 'user_deletion_failed',
+        code: 'INTERNAL_FAILURE',
+        timestamp: Date.now()
+      }))
       return apiErr(c, DNS_GENERIC_SAFE_MESSAGE, 500)
     }
   })
@@ -235,6 +269,10 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       return apiErr(c, "请填写完整信息，密码至少 8 位")
     }
 
+    if (await findUserIdByEmail(c.env.DB, email)) {
+      return apiErr(c, "该邮箱已注册", 409)
+    }
+
     const auth = await createAuth(c.env)
     try {
       const signUpRes = await auth.api.signUpEmail({
@@ -244,19 +282,23 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       })
       withoutSetCookieHeaders(signUpRes.headers)
       if (!signUpRes.ok) {
-        const data = await signUpRes.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "创建用户失败"
-        return apiErr(c, msg, signUpRes.status)
+        const message = signUpRes.status === 422 || signUpRes.status === 409
+          ? "该邮箱已注册"
+          : "创建用户失败"
+        return apiErr(c, message, signUpRes.status)
       }
-      const listRes = await listAllUsers(c.env.DB)
-      const newUser = listRes.find((u) => u.email === email)
-      if (newUser && role === 'admin') {
-        await setUserRole(c.env.DB, newUser.id, 'admin')
+      const newUserId = await findUserIdByEmail(c.env.DB, email)
+      if (newUserId && role === 'admin') {
+        await setUserRole(c.env.DB, newUserId, 'admin')
       }
       return apiOk(c, undefined, { message: "用户已创建" })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "创建用户失败"
-      return apiErr(c, msg, 500)
+      console.error(JSON.stringify({
+        event: 'admin_route_failure',
+        operation: 'user_create',
+        error_name: err instanceof Error ? err.name : 'UnknownError'
+      }))
+      return apiErr(c, "创建用户失败", 500)
     }
   })
 
@@ -285,14 +327,18 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return apiErr(c, "无权限", 403)
 
-    const settings = await getSettings(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     if (!settings.invite_required) return apiErr(c, "请先开启邀请码注册")
     try {
       const created = await createInviteCode(c.env.DB, admin.id)
       return apiOk(c, { code: created.code }, { message: "已创建邀请码 " + created.code })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "创建邀请码失败"
-      return apiErr(c, msg, 500)
+      console.error(JSON.stringify({
+        event: 'admin_route_failure',
+        operation: 'invite_create',
+        error_name: err instanceof Error ? err.name : 'UnknownError'
+      }))
+      return apiErr(c, "创建邀请码失败", 500)
     }
   })
 
@@ -313,6 +359,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (denied) return denied
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return apiErr(c, "无权限", 403)
+    if (!isSuperAdminUser(admin)) return apiErr(c, "仅超级管理员可管理 OAuth 应用", 403)
 
     const body = await readJsonBody(c)
     const result = await createOAuthProvider(c.env.DB, {
@@ -329,7 +376,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       enabled: asBool(body.enabled),
       sort_order: Number(body.sort_order ?? 0),
       icon_url: String(body.icon_url ?? '')
-    })
+    }, sensitiveDataKeysFromEnv(c.env), c.env.OAUTH_ALLOWED_HOSTS)
     if (!result.ok) return apiErr(c, result.message)
     return apiOk(c, { provider: maskOAuthProviderForAdmin(result.provider) }, {
       message: "已添加 OAuth 应用 " + result.provider.name
@@ -342,6 +389,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const admin = await requireAdmin(c.env, c.req.raw.headers)
     if (!admin) return apiErr(c, "无权限", 403)
 
+    if (!isSuperAdminUser(admin)) return apiErr(c, "仅超级管理员可管理 OAuth 应用", 403)
     const id = c.req.param('id')
     const body = await readJsonBody(c)
     const result = await updateOAuthProvider(c.env.DB, id, {
@@ -358,7 +406,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
       enabled: asBool(body.enabled),
       sort_order: Number(body.sort_order ?? 0),
       icon_url: String(body.icon_url ?? '')
-    })
+    }, sensitiveDataKeysFromEnv(c.env), c.env.OAUTH_ALLOWED_HOSTS)
     if (!result.ok) return apiErr(c, result.message)
     return apiOk(c, undefined, { message: "已更新" })
   })
@@ -370,6 +418,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!admin) return apiErr(c, "无权限", 403)
 
     const id = c.req.param('id')
+    if (!isSuperAdminUser(admin)) return apiErr(c, "仅超级管理员可管理 OAuth 应用", 403)
     const body = await readJsonBody(c)
     const enabled = asBool(body.enabled)
     await setOAuthProviderEnabled(c.env.DB, id, enabled)
@@ -383,6 +432,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!admin) return apiErr(c, "无权限", 403)
 
     const id = c.req.param('id')
+    if (!isSuperAdminUser(admin)) return apiErr(c, "仅超级管理员可管理 OAuth 应用", 403)
     await deleteOAuthProvider(c.env.DB, id)
     return apiOk(c, undefined, { message: "已删除" })
   })
@@ -394,6 +444,7 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!admin) return apiErr(c, "无权限", 403)
 
     const body = await readJsonBody(c)
+    if (!isSuperAdminUser(admin)) return apiErr(c, "仅超级管理员可发送测试邮件", 403)
     const toEmail = String(body.to_email ?? '').trim()
     if (!toEmail || !toEmail.includes('@')) {
       return apiErr(c, "请输入有效的接收邮箱")

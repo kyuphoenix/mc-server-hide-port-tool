@@ -3,7 +3,7 @@ import { getCurrentUser, isSuperAdminUser, requireAdmin } from '../auth'
 import { pageShellResponse } from '../lib/page-shell'
 import { apiErr, apiOk, maskSettingsForAdmin, publicSettings } from '../lib/api'
 import { safeInternalPath } from '../lib/security'
-import { listAllRecords, listRecordsByUser, searchUsers, type UserSearchRole } from '../services/dns-records'
+import { listAllRecordsPage, listRecentRecordsByUser, searchUsersPage, type UserSearchRole } from '../services/dns-records'
 import { maskUsersForAdmin } from '../lib/privacy'
 import { listInviteCodes } from '../services/invite-codes'
 import { listOAuthProvidersForAdmin, listPublicOAuthProviders, OAUTH_TEMPLATES } from '../services/oauth-providers'
@@ -12,6 +12,7 @@ import { reconcileFirstSetup } from '../services/first-setup'
 import { listLinkedAccounts, type PasskeyRow } from '../services/user-settings'
 import { createAuth } from '../auth'
 import type { Bindings } from '../services/cloudflare-dns'
+import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
 
 type AdminTab = 'settings' | 'oauth' | 'invites' | 'users' | 'dns'
 
@@ -23,6 +24,10 @@ function parseAdminTab(raw: string | undefined | null): AdminTab {
   const v = String(raw ?? '').trim().toLowerCase()
   if (v === 'oauth' || v === 'invites' || v === 'users' || v === 'dns' || v === 'settings') return v
   return 'settings'
+}
+
+function parsePositivePage(raw: string | undefined | null): number {
+  return Math.max(1, Math.floor(Number(raw)) || 1)
 }
 
 async function listPasskeysForUser(
@@ -141,7 +146,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return apiErr(c, '未登录', 401, { redirect: '/login' })
-    const records = await listRecordsByUser(c.env.DB, user.id)
+    const records = await listRecentRecordsByUser(c.env.DB, user.id)
     return apiOk(c, { user: serializeUser(user), records })
   })
 
@@ -152,7 +157,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const next = safeInternalPath(c.req.query('next'), '/')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, null, { redirect: next })
-    const oauthProviders = await listPublicOAuthProviders(c.env.DB)
+    const oauthProviders = await listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS)
     return apiOk(c, {
       next,
       oauthProviders,
@@ -167,8 +172,8 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, null, { redirect: '/' })
-    const settings = await getSettings(c.env.DB)
-    const oauthProviders = await listPublicOAuthProviders(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
+    const oauthProviders = await listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS)
     return apiOk(c, {
       settings: publicSettings(settings),
       oauthProviders,
@@ -184,7 +189,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/api/pages/github-age-rejected', async (c) => {
-    const settings = await getSettings(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     const minDays = Math.max(0, Number(c.req.query('min_days') ?? settings.github_min_account_age_days) || 0)
     const actualDaysRaw = c.req.query('actual_days')
     const actualDays = actualDaysRaw == null || actualDaysRaw === '' ? null : Math.max(0, Number(actualDaysRaw) || 0)
@@ -197,7 +202,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const auth = await createAuth(c.env)
     const [linkedAccounts, availableProviders, passkeys] = await Promise.all([
       listLinkedAccounts(c.env.DB, user.id),
-      listPublicOAuthProviders(c.env.DB),
+      listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS),
       listPasskeysForUser(auth, c.req.raw.headers)
     ])
     return apiOk(c, {
@@ -217,18 +222,32 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const role: UserSearchRole =
       roleRaw === 'user' || roleRaw === 'admin' || roleRaw === 'super' ? roleRaw : 'all'
 
-    const [users, records, settings, inviteCodes, oauthProviders] = await Promise.all([
-      searchUsers(c.env.DB, { q, role }),
-      listAllRecords(c.env.DB),
-      getSettings(c.env.DB),
+    const userPage = parsePositivePage(c.req.query('user_page'))
+    const dnsPage = parsePositivePage(c.req.query('dns_page'))
+    const [usersResult, recordsResult, settings, inviteCodes, oauthProviders] = await Promise.all([
+      searchUsersPage(c.env.DB, { q, role, page: userPage, pageSize: 50 }),
+      listAllRecordsPage(c.env.DB, { page: dnsPage, pageSize: 50 }),
+      getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env)),
       listInviteCodes(c.env.DB),
       listOAuthProvidersForAdmin(c.env.DB)
     ])
     return apiOk(c, {
       activeTab,
-      users: maskUsersForAdmin(users),
+      users: maskUsersForAdmin(usersResult.items),
       usersQuery: { q, role },
-      records,
+      userPagination: {
+        total: usersResult.total,
+        page: usersResult.page,
+        pageSize: usersResult.pageSize,
+        totalPages: usersResult.totalPages
+      },
+      records: recordsResult.items,
+      dnsPagination: {
+        total: recordsResult.total,
+        page: recordsResult.page,
+        pageSize: recordsResult.pageSize,
+        totalPages: recordsResult.totalPages
+      },
       settings: maskSettingsForAdmin(settings),
       inviteCodes,
       oauthProviders,

@@ -10,6 +10,7 @@ import {
   clearVerificationFailures,
   deleteEmailVerificationsByEmail,
   findLatestEmailVerification,
+  generateVerificationCode,
   isVerificationRateLimited,
   openPendingPassword,
   purgeExpiredEmailVerifications,
@@ -61,9 +62,24 @@ import {
   readJsonBody,
   requireJsonMutation
 } from '../lib/api'
+import {
+  buildRateLimitKey,
+  clearRateLimit,
+  consumeAnyRateLimit,
+  getClientAddress
+} from '../services/rate-limit'
+import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
 
 function logOAuthRegistrationFailure(error: unknown, providerId: string): void {
   console.error(JSON.stringify(createOAuthRegistrationSecurityEvent(error, { providerId })))
+}
+
+function logAuthRouteFailure(operation: string, error: unknown): void {
+  console.error(JSON.stringify({
+    event: 'auth_route_failure',
+    operation,
+    error_name: error instanceof Error ? error.name : 'UnknownError'
+  }))
 }
 
 type AuthRouteContext = Context<{ Bindings: Bindings }>
@@ -222,6 +238,22 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const password = String(body.password ?? '')
     if (!email || !password) return apiErr(c, "请填写邮箱和密码")
 
+    const clientAddress = getClientAddress(c.req.raw.headers)
+    const [ipKey, emailKey, emailIpKey] = await Promise.all([
+      buildRateLimitKey('login_ip', clientAddress),
+      buildRateLimitKey('login_email', email),
+      buildRateLimitKey('login_email_ip', `${email}|${clientAddress}`)
+    ])
+    const limited = await consumeAnyRateLimit(c.env.DB, [
+      { key: ipKey, limit: 30, windowMs: 10 * 60 * 1000 },
+      { key: emailKey, limit: 20, windowMs: 10 * 60 * 1000 },
+      { key: emailIpKey, limit: 8, windowMs: 10 * 60 * 1000 }
+    ])
+    if (limited) {
+      c.header('Retry-After', String(limited.retryAfterSec))
+      return apiErr(c, '登录尝试过于频繁，请稍后重试', 429)
+    }
+
     const auth = await createAuth(c.env)
     try {
       const res = await auth.api.signInEmail({
@@ -230,16 +262,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (res.ok) {
+        await clearRateLimit(c.env.DB, [emailKey, emailIpKey]).catch(() => undefined)
         return apiOkWithHeaders(undefined, res.headers, { redirect: next, message: "登录成功" })
       }
-      const data = await res.json().catch(() => ({}))
-      const message =
-        (data as { message?: string }).message ||
-        (res.status === 401 ? "邮箱或密码错误" : "登录失败")
-      return apiErr(c, message, res.status)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "登录失败"
-      return apiErr(c, message, 500)
+      return apiErr(c, '邮箱或密码错误', res.status === 429 ? 429 : 401)
+    } catch {
+      return apiErr(c, '登录服务暂不可用，请稍后重试', 500)
     }
   })
 
@@ -252,7 +280,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const setupDenied = await requireFirstSetupCompleted(c)
     if (setupDenied) return setupDenied
 
-    const settings = await getSettings(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     if (!settings.registration_enabled) return apiErr(c, "当前已关闭注册", 403)
     if (settings.registration_mode === 'oauth') return apiErr(c, "当前仅支持 OAuth 注册", 403)
 
@@ -272,10 +300,27 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!inviteCheck.ok) return apiErr(c, inviteCheck.message)
 
     if (settings.resend_enabled && settings.resend_accounts.length > 0) {
-      const code = String(Math.floor(100000 + Math.random() * 900000))
+      const clientAddress = getClientAddress(c.req.raw.headers)
+      const [ipKey, emailKey] = await Promise.all([
+        buildRateLimitKey('verification_send_ip', clientAddress),
+        buildRateLimitKey('verification_send_email', email)
+      ])
+      const limited = await consumeAnyRateLimit(c.env.DB, [
+        { key: ipKey, limit: 10, windowMs: 15 * 60 * 1000 },
+        { key: emailKey, limit: 3, windowMs: 15 * 60 * 1000 }
+      ])
+      if (limited) {
+        c.header('Retry-After', String(limited.retryAfterSec))
+        return apiErr(c, '验证码发送过于频繁，请稍后重试', 429)
+      }
+
+      const existingUserId = await findUserIdByEmail(c.env.DB, email)
+      if (existingUserId) return apiErr(c, '该邮箱已注册', 409)
+
+      const code = generateVerificationCode()
       const codeHash = await hashPassword(code)
       const expires_at = Date.now() + 10 * 60 * 1000
-      const passwordSealed = await sealPendingPassword(c.env.BETTER_AUTH_SECRET, password)
+      const passwordSealed = await sealPendingPassword(sensitiveDataKeysFromEnv(c.env), password)
       await purgeExpiredEmailVerifications(c.env.DB)
       await upsertEmailVerification(c.env.DB, {
         email,
@@ -306,14 +351,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         }
         return apiOk(c, undefined, { redirect: '/login?registered=1', message: "注册成功" })
       }
-      const data = await res.json().catch(() => ({}))
-      const message =
-        (data as { message?: string }).message ||
-        (res.status === 422 ? "该邮箱已注册" : "注册失败")
+      const message = res.status === 422 || res.status === 409 ? "该邮箱已注册" : "注册失败"
       return apiErr(c, message, res.status)
     } catch (err) {
-      const message = err instanceof Error ? err.message : "注册失败"
-      return apiErr(c, message, 500)
+      logAuthRouteFailure('email_signup', err)
+      return apiErr(c, "注册失败", 500)
     }
   })
 
@@ -326,7 +368,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const setupDenied = await requireFirstSetupCompleted(c)
     if (setupDenied) return setupDenied
 
-    const settings = await getSettings(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     const body = await readJsonBody(c)
     const email = String(body.email ?? '').trim()
     const code = String(body.code ?? '').trim()
@@ -369,7 +411,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     let plainPassword: string
     try {
-      plainPassword = await openPendingPassword(c.env.BETTER_AUTH_SECRET, row.password)
+      plainPassword = await openPendingPassword(sensitiveDataKeysFromEnv(c.env), row.password)
     } catch {
       return apiErr(c, "注册信息已失效，请重新注册")
     }
@@ -392,14 +434,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         await clearVerificationFailures(c.env.DB, email, clientIp)
         return apiOk(c, undefined, { redirect: '/login?registered=1', message: "注册成功" })
       }
-      const data = await res.json().catch(() => ({}))
-      const message =
-        (data as { message?: string }).message ||
-        (res.status === 422 ? "该邮箱已注册" : "注册失败")
+      const message = res.status === 422 || res.status === 409 ? "该邮箱已注册" : "注册失败"
       return apiErr(c, message, res.status)
     } catch (err) {
-      const message = err instanceof Error ? err.message : "注册失败"
-      return apiErr(c, message, 500)
+      logAuthRouteFailure('verified_email_signup', err)
+      return apiErr(c, "注册失败", 500)
     }
   })
 
@@ -430,14 +469,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         return apiOkWithHeaders(undefined, extracted.headers, { redirect: extracted.url })
       }
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "OAuth 登录失败"
-        return apiErr(c, msg, res.status)
+        return apiErr(c, "OAuth 登录失败", res.status)
       }
       return apiErr(c, "OAuth 登录失败")
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "OAuth 登录失败"
-      return apiErr(c, msg, 500)
+      logAuthRouteFailure('oauth_login', err)
+      return apiErr(c, "OAuth 登录失败", 500)
     }
   })
 
@@ -450,7 +487,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
     const setupDenied = await requireFirstSetupCompleted(c)
     if (setupDenied) return setupDenied
 
-    const settings = await getSettings(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     if (!settings.registration_enabled) return apiErr(c, "当前已关闭注册", 403)
     if (settings.registration_mode === 'email') return apiErr(c, "当前仅支持邮箱注册", 403)
 
@@ -595,7 +632,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
       pathname.includes('/oauth2/callback/github')
 
     const redirectAgeRejected = async (value: unknown) => {
-      const settings = await getSettings(c.env.DB)
+      const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
       const details = extractGitHubAgeRejectedDetails(value, settings.github_min_account_age_days)
       return c.redirect(githubAgeRejectedPath(details.minDays, details.actualDays))
     }

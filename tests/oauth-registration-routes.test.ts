@@ -4,9 +4,9 @@ import app from '../src/index'
 import { createAuth } from '../src/auth'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import {
-  findOAuthProviderByProviderId,
-  toGenericOAuthConfig
+  listEnabledOAuthProviders
 } from '../src/services/oauth-providers'
+import { sensitiveDataKeysFromEnv } from '../src/services/sensitive-data'
 import {
   authorizeOAuthRegistrationIntent,
   bindOAuthRegistrationIntentState,
@@ -47,6 +47,7 @@ async function setup(
   const env: Bindings = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App'
   } as unknown as Bindings
@@ -68,6 +69,7 @@ async function setupUninitialized(status: 'open' | 'claimed') {
   const env: Bindings = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App'
   } as unknown as Bindings
@@ -558,6 +560,7 @@ describe('OAuth registration routes', { timeout: 15_000 }, () => {
 
   it('redacts OAuth provider secrets from admin mutations while preserving runtime use', async () => {
     const { db, env } = await setup()
+    env.OAUTH_ALLOWED_HOSTS = 'private.example'
     await db.prepare('DELETE FROM oauth_provider WHERE provider_id = ?')
       .bind('private-provider')
       .run()
@@ -614,9 +617,13 @@ describe('OAuth registration routes', { timeout: 15_000 }, () => {
     expect(retainResponse.status).toBe(200)
     expect(retainText).not.toContain(originalSecret)
     expect(retainText).not.toContain('client_secret')
-    expect(await db.prepare(
+    const retainedStored = await db.prepare(
       'SELECT client_secret FROM oauth_provider WHERE id = ?'
-    ).bind('fixture-provider').first()).toEqual({ client_secret: originalSecret })
+    ).bind('fixture-provider').first<{ client_secret: string }>()
+    expect(retainedStored?.client_secret).toMatch(/^enc:v1:/)
+    expect(retainedStored?.client_secret).not.toContain(originalSecret)
+    expect((await listEnabledOAuthProviders(db, sensitiveDataKeysFromEnv(env)))[0]?.client_secret)
+      .toBe(originalSecret)
 
     const replaceResponse = await postJsonWithHeaders(env, '/api/admin/oauth/fixture-provider/update', {
       provider_id: FIXTURE_PROVIDER_ID,
@@ -638,14 +645,13 @@ describe('OAuth registration routes', { timeout: 15_000 }, () => {
     expect(replaceText).not.toContain(originalSecret)
     expect(replaceText).not.toContain(nextSecret)
     expect(replaceText).not.toContain('client_secret')
-    expect(await db.prepare(
+    const replacedStored = await db.prepare(
       'SELECT client_secret FROM oauth_provider WHERE id = ?'
-    ).bind('fixture-provider').first()).toEqual({ client_secret: nextSecret })
-
-    const row = await findOAuthProviderByProviderId(db, FIXTURE_PROVIDER_ID)
-    expect(row).not.toBeNull()
-    const config = toGenericOAuthConfig(row!, db) as { clientSecret?: string }
-    expect(config.clientSecret).toBe(nextSecret)
+    ).bind('fixture-provider').first<{ client_secret: string }>()
+    expect(replacedStored?.client_secret).toMatch(/^enc:v1:/)
+    expect(replacedStored?.client_secret).not.toContain(nextSecret)
+    expect((await listEnabledOAuthProviders(db, sensitiveDataKeysFromEnv(env)))[0]?.client_secret)
+      .toBe(nextSecret)
   })
 
   it('uses shared cleanup to reconcile an authorized intent whose user exists', async () => {

@@ -72,7 +72,7 @@ export function sameOriginJsonHeaders(cookie = 'csrf_token=test-csrf'): Headers 
   })
 }
 
-export function mockOAuthProviderFetch() {
+export function mockOAuthProviderFetch(options: { email?: string } = {}) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string'
       ? input
@@ -88,7 +88,7 @@ export function mockOAuthProviderFetch() {
     if (url === 'https://provider.example/userinfo') {
       return Response.json({
         id: 'provider-user-1',
-        email: 'oauth-user@example.test',
+        email: options.email ?? 'oauth-user@example.test',
         email_verified: true,
         name: 'OAuth User'
       })

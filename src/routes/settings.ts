@@ -12,6 +12,14 @@ import {
 } from '../lib/api'
 import type { Bindings } from '../services/cloudflare-dns'
 
+function logSettingsRouteFailure(operation: string, error: unknown): void {
+  console.error(JSON.stringify({
+    event: 'settings_route_failure',
+    operation,
+    error_name: error instanceof Error ? error.name : 'UnknownError'
+  }))
+}
+
 export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.post('/api/settings/profile', async (c) => {
     const denied = await requireJsonMutation(c)
@@ -33,14 +41,12 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "更新用户名失败"
-        return apiErr(c, msg, res.status)
+        return apiErr(c, "更新用户名失败", res.status)
       }
       return apiOkWithHeaders(undefined, res.headers, { message: "用户名已更新" })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "更新用户名失败"
-      return apiErr(c, msg, 500)
+      logSettingsRouteFailure('profile_update', err)
+      return apiErr(c, "更新用户名失败", 500)
     }
   })
 
@@ -54,7 +60,7 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
     const providerId = String(body.provider_id ?? '').trim()
     if (!providerId) return apiErr(c, "请选择要绑定的 OAuth 应用")
 
-    const providers = await listPublicOAuthProviders(c.env.DB)
+    const providers = await listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS)
     if (!providers.some((p) => p.provider_id === providerId)) {
       return apiErr(c, "该 OAuth 应用不可用或未启用")
     }
@@ -80,14 +86,12 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         return apiOkWithHeaders(undefined, extracted.headers, { redirect: extracted.url })
       }
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "社交账号绑定失败"
-        return apiErr(c, msg, res.status)
+        return apiErr(c, "社交账号绑定失败", res.status)
       }
       return apiErr(c, "社交账号绑定失败")
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "社交账号绑定失败"
-      return apiErr(c, msg, 500)
+      logSettingsRouteFailure('oauth_link', err)
+      return apiErr(c, "社交账号绑定失败", 500)
     }
   })
 
@@ -118,14 +122,12 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "解绑失败"
-        return apiErr(c, msg, res.status)
+        return apiErr(c, "解绑失败", res.status)
       }
       return apiOkWithHeaders(undefined, res.headers, { message: "已解绑社交账号" })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "解绑失败"
-      return apiErr(c, msg, 500)
+      logSettingsRouteFailure('oauth_unlink', err)
+      return apiErr(c, "解绑失败", 500)
     }
   })
 
@@ -152,14 +154,12 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
         asResponse: true
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const msg = (data as { message?: string }).message || "删除 Passkey 失败"
-        return apiErr(c, msg, res.status)
+        return apiErr(c, "删除 Passkey 失败", res.status)
       }
       return apiOkWithHeaders(undefined, res.headers, { message: "Passkey 已删除" })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "删除 Passkey 失败"
-      return apiErr(c, msg, 500)
+      logSettingsRouteFailure('passkey_delete', err)
+      return apiErr(c, "删除 Passkey 失败", 500)
     }
   })
 }

@@ -1,4 +1,9 @@
 import { getCachedSettings, invalidateSettingsCache } from './request-cache'
+import {
+  openSensitiveValue,
+  sealSensitiveValue,
+  type SensitiveDataKeySource
+} from './sensitive-data'
 
 export type ResendAccount = {
   api_key: string
@@ -55,20 +60,20 @@ export const DEFAULT_SETTINGS: Settings = {
 export function isEmailAllowed(email: string, s: Settings): { ok: boolean; reason?: string } {
   const suffix = email.split('@')[1]?.toLowerCase() ?? ''
   if (!suffix) {
-    return { ok: false, reason: '???????' }
+    return { ok: false, reason: '邮箱格式无效' }
   }
 
   if (s.email_whitelist_enabled) {
     const list = s.email_whitelist_suffixes.map((x) => x.toLowerCase().trim()).filter(Boolean)
     if (list.length > 0 && !list.some((d) => suffix === d || suffix.endsWith('.' + d))) {
-      return { ok: false, reason: '?????????' }
+      return { ok: false, reason: '邮箱域名不在允许列表中' }
     }
   }
 
   if (s.email_blacklist_enabled) {
     const list = s.email_blacklist_suffixes.map((x) => x.toLowerCase().trim()).filter(Boolean)
     if (list.some((d) => suffix === d || suffix.endsWith('.' + d))) {
-      return { ok: false, reason: '?????????' }
+      return { ok: false, reason: '邮箱域名不允许注册' }
     }
   }
 
@@ -181,16 +186,23 @@ export function hasResendCredentials(s: Settings): boolean {
   return s.resend_accounts.length > 0
 }
 
-async function loadSettingsFromDb(db: D1Database): Promise<Settings> {
-  const row = await db
+async function loadSettingsRow(db: D1Database): Promise<DbRow | null> {
+  return await db
     .prepare('SELECT * FROM settings WHERE id = ?')
     .bind('default')
     .first<DbRow>()
+}
 
+export async function getSettings(
+  db: D1Database,
+  keys?: SensitiveDataKeySource
+): Promise<Settings> {
+  const row = await getCachedSettings<DbRow | null>(db, () => loadSettingsRow(db))
   if (!row) {
     return { ...DEFAULT_SETTINGS }
   }
 
+  const resendApiKey = await openSensitiveValue(keys, row.resend_api_key ?? '')
   return {
     registration_enabled: !!row.registration_enabled,
     registration_mode: normalizeMode(row.registration_mode),
@@ -201,23 +213,23 @@ async function loadSettingsFromDb(db: D1Database): Promise<Settings> {
     email_blacklist_suffixes: safeParseArray(row.email_blacklist_suffixes),
     github_min_account_age_days: row.github_min_account_age_days || 0,
     resend_enabled: !!row.resend_enabled,
-    resend_accounts: parseResendAccounts(row.resend_api_key, row.resend_from),
+    resend_accounts: parseResendAccounts(resendApiKey, row.resend_from),
     max_records_per_user: row.max_records_per_user ?? DEFAULT_SETTINGS.max_records_per_user,
     min_subdomain_length: row.min_subdomain_length ?? DEFAULT_SETTINGS.min_subdomain_length
   }
 }
 
-export async function getSettings(db: D1Database): Promise<Settings> {
-  return getCachedSettings(db, () => loadSettingsFromDb(db))
-}
-
 export async function updateSettings(
   db: D1Database,
-  patch: Partial<Settings>
+  patch: Partial<Settings>,
+  keys?: SensitiveDataKeySource
 ): Promise<Settings> {
-  const current = await getSettings(db)
+  const current = await getSettings(db, keys)
   const next: Settings = { ...current, ...patch }
   const serialized = serializeResendAccounts(next.resend_accounts)
+  const storedResendApiKey = serialized.resend_api_key
+    ? await sealSensitiveValue(keys, serialized.resend_api_key)
+    : ''
 
   await db
     .prepare(
@@ -247,7 +259,7 @@ export async function updateSettings(
       JSON.stringify(next.email_blacklist_suffixes),
       next.github_min_account_age_days,
       next.resend_enabled ? 1 : 0,
-      serialized.resend_api_key,
+      storedResendApiKey,
       serialized.resend_from,
       next.max_records_per_user,
       next.min_subdomain_length,

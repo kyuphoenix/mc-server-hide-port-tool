@@ -1,4 +1,5 @@
 import { APIError } from 'better-auth'
+import { fetchWithPolicy, readTextWithLimit } from '../lib/external-fetch'
 
 export type GitHubUser = {
   id: number
@@ -12,32 +13,40 @@ export type GitHubUser = {
 /** Stable machine code embedded in thrown errors for callback interception. */
 export const GITHUB_ACCOUNT_AGE_REJECTED_CODE = 'GITHUB_ACCOUNT_AGE_REJECTED'
 
-export async function getGitHubUser(accessToken: string): Promise<GitHubUser | null> {
-  const res = await fetch('https://api.github.com/user', {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'hide-port-tool'
+async function fetchGitHubJson<T>(url: string, accessToken: string): Promise<T | null> {
+  try {
+    const response = await fetchWithPolicy(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'hide-port-tool'
+      }
+    }, {
+      timeoutMs: 5_000,
+      retries: 1
+    })
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined)
+      return null
     }
-  })
-  if (!res.ok) return null
-  return (await res.json()) as GitHubUser
+    return JSON.parse(await readTextWithLimit(response, 512 * 1024, 5_000)) as T
+  } catch {
+    return null
+  }
+}
+
+export async function getGitHubUser(accessToken: string): Promise<GitHubUser | null> {
+  return fetchGitHubJson<GitHubUser>('https://api.github.com/user', accessToken)
 }
 
 export async function getGitHubPrimaryEmail(accessToken: string): Promise<string | null> {
-  const emailsRes = await fetch('https://api.github.com/user/emails', {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'hide-port-tool'
-    }
-  })
-  if (!emailsRes.ok) return null
-  const emails = (await emailsRes.json()) as Array<{
+  const emails = await fetchGitHubJson<Array<{
     email?: string
     primary?: boolean
     verified?: boolean
-  }>
+  }>>('https://api.github.com/user/emails', accessToken)
+  if (!emails) return null
   const primary = emails.find((e) => e.primary && e.email) || emails.find((e) => e.email)
   return primary?.email ?? null
 }

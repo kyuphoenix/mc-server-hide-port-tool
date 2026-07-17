@@ -1,4 +1,5 @@
 ﻿import type { Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { requireMutationCsrf } from './csrf'
 
 export type ApiSuccess<T = unknown> = {
@@ -15,6 +16,18 @@ export type ApiFailure = {
   data?: unknown
   redirect?: string
 }
+
+export const MAX_MUTATION_BODY_BYTES = 64 * 1024
+
+export const mutationBodyLimit = bodyLimit({
+  maxSize: MAX_MUTATION_BODY_BYTES,
+  onError: (c) => {
+    if (c.req.path.startsWith('/api/')) {
+      return apiErr(c, '请求体过大', 413, { code: 'PAYLOAD_TOO_LARGE' })
+    }
+    return c.text('Payload Too Large', 413)
+  }
+})
 
 export function apiOk<T = unknown>(
   c: Context,

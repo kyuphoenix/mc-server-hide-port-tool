@@ -4,6 +4,7 @@ import app from '../src/index'
 import { createAuth } from '../src/auth'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import { updateSettings } from '../src/services/settings'
+import { sensitiveDataKeysFromEnv } from '../src/services/sensitive-data'
 import {
   bindFirstSetupUser,
   claimFirstSetup,
@@ -45,6 +46,7 @@ async function setupOpen() {
   const env: Bindings = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App'
   } as unknown as Bindings
@@ -481,7 +483,7 @@ describe('first setup route', { timeout: 30_000 }, () => {
         invite_required: false,
         resend_enabled: true,
         resend_accounts: [{ api_key: 'private-resend-key', from: 'sender@example.test' }]
-      })
+      }, sensitiveDataKeysFromEnv(env))
       if (status === 'claimed') await claimFirstSetup(db)
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
         throw new Error('mailer must not be called before setup')

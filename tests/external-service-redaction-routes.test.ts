@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { hashPassword } from 'better-auth/crypto'
 import app from '../src/index'
 import { createAuth } from '../src/auth'
-import { insertRecord } from '../src/services/dns-records'
+import { findRecordById, insertRecord } from '../src/services/dns-records'
 import { updateSettings } from '../src/services/settings'
+import { sensitiveDataKeysFromEnv } from '../src/services/sensitive-data'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import {
   createTestD1,
@@ -47,6 +48,7 @@ async function setup(extraEnv: Partial<Bindings> = {}) {
   const env = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App',
     DOMAINS: 'example.test',
@@ -133,6 +135,23 @@ function mockCloudflareFailure(failingMethod: 'POST' | 'PUT' | 'DELETE') {
   })
 }
 
+function mockCloudflareDeleteNotFound() {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url
+    if (url.includes('/zones?')) {
+      return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+    }
+    if (url.includes('/dns_records?')) {
+      return Response.json({ success: true, result: [] })
+    }
+    return Response.json({ success: false, result: null }, { status: 404 })
+  })
+}
+
 function mockResendFailure() {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string'
@@ -213,6 +232,90 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     }
   })
 
+  it('persists and resumes a partially-created DNS record', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    let postCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (url.includes('/zones?')) return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+      if (url.includes('/dns_records?')) return Response.json({ success: true, result: [] })
+      if (method === 'POST') {
+        postCount += 1
+        if (postCount === 1) return Response.json({ success: true, result: { id: 'durable-target', name: 'play.example.test', type: 'A' } })
+        return Response.json({ success: false, errors: [{ message: 'temporary failure' }] }, { status: 500 })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const failed = await postJson(env, '/api/create-dns', {
+      subdomain: 'play',
+      rootDomain: 'example.test',
+      serverAddress: '198.51.100.10',
+      port: 25565
+    }, headers)
+    expect(failed.status).toBe(500)
+
+    const pending = await db.prepare(
+      `SELECT id, sync_status, sync_error_code, target_record_id, srv_record_id
+       FROM dns_record WHERE host_name = ?`
+    ).bind('play.example.test').first<{
+      id: string
+      sync_status: string
+      sync_error_code: string | null
+      target_record_id: string
+      srv_record_id: string | null
+    }>()
+    expect(pending).toMatchObject({
+      sync_status: 'error',
+      sync_error_code: 'CLOUDFLARE_REQUEST_FAILED',
+      target_record_id: 'durable-target',
+      srv_record_id: null
+    })
+
+    vi.restoreAllMocks()
+    let putCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (url.includes('/zones?')) return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+      if (url.includes('/dns_records?')) {
+        const name = new URL(url).searchParams.get('name.exact')
+        return Response.json({
+          success: true,
+          result: name === 'play.example.test'
+            ? [{ id: 'durable-target', name: 'play.example.test', type: 'A', content: '198.51.100.99' }]
+            : []
+        })
+      }
+      if (method === 'PUT') {
+        putCount += 1
+        return Response.json({ success: true, result: { id: 'durable-target', name: 'play.example.test', type: 'A', content: '198.51.100.10' } })
+      }
+      if (method === 'POST') {
+        return Response.json({ success: true, result: { id: 'durable-srv', name: '_minecraft._tcp.play.example.test', type: 'SRV' } })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const retried = await postJson(env, '/api/create-dns', {
+      subdomain: 'play',
+      rootDomain: 'example.test',
+      serverAddress: '198.51.100.10',
+      port: 25565
+    }, headers)
+    expect(retried.status).toBe(200)
+    expect(putCount).toBe(1)
+    const active = await findRecordById(db, pending!.id)
+    expect(active).toMatchObject({
+      sync_status: 'active',
+      sync_error_code: null,
+      target_record_id: 'durable-target',
+      srv_record_id: 'durable-srv'
+    })
+  })
+
   it('redacts Cloudflare update and delete failures', async () => {
     const { db, env } = await setup()
     const headers = await adminHeaders(db, env)
@@ -224,21 +327,56 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
       port: 25566
     }, headers)
     const updateText = await updateResponse.text()
+
     expect(updateResponse.status).toBe(500)
     expect(updateText).toContain('DNS 服务暂时不可用，请稍后重试')
     assertNoPrivateText(updateText)
+    expect(await findRecordById(db, 'record-one')).toMatchObject({
+      sync_status: 'error',
+      sync_error_code: 'CLOUDFLARE_REQUEST_FAILED',
+      server_address: '198.51.100.10',
+      pending_server_address: '198.51.100.11',
+      pending_port: 25566,
+      pending_target_type: 'A'
+    })
 
     vi.restoreAllMocks()
     mockCloudflareFailure('DELETE')
     const deleteErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const deleteResponse = await postJson(env, '/api/dns/record-one/delete', {}, headers)
     const deleteText = await deleteResponse.text()
-    expect(deleteResponse.status).toBe(200)
-    expect(deleteText).toContain('记录已删除')
+    expect(deleteResponse.status).toBe(500)
+    expect(deleteText).toContain('DNS 请求处理失败，请稍后重试')
+    expect(await findRecordById(db, 'record-one')).not.toBeNull()
     assertNoPrivateText(deleteText)
     const events = parsedSecurityEvents(deleteErrorSpy)
     expect(events.some((event) => event.stage === 'record_delete')).toBe(true)
     for (const event of events) assertNoPrivateText(JSON.stringify(event))
+
+  })
+  it('keeps the D1 row when the Cloudflare token is missing', async () => {
+    const { db, env } = await setup({
+      example_test_CLOUDFLARE_API_TOKEN: ''
+    } as Partial<Bindings>)
+    const headers = await adminHeaders(db, env)
+    await seedDnsRecord(db)
+
+    const response = await postJson(env, '/api/dns/record-one/delete', {}, headers)
+
+    expect(response.status).toBe(500)
+    expect(await findRecordById(db, 'record-one')).not.toBeNull()
+  })
+
+  it('treats Cloudflare 404 deletes as idempotent success', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    await seedDnsRecord(db)
+    mockCloudflareDeleteNotFound()
+
+    const response = await postJson(env, '/api/dns/record-one/delete', {}, headers)
+
+    expect(response.status).toBe(200)
+    expect(await findRecordById(db, 'record-one')).toBeNull()
   })
 
   it('redacts Resend failures and logs allowlisted mail events', async () => {
@@ -247,7 +385,7 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     await updateSettings(db, {
       resend_enabled: true,
       resend_accounts: [{ api_key: 'resend-secret-key', from: 'sender-private@example.test' }]
-    })
+    }, sensitiveDataKeysFromEnv(env))
     mockResendFailure()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
@@ -274,7 +412,7 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     await updateSettings(db, {
       resend_enabled: true,
       resend_accounts: [{ api_key: 'resend-secret-key', from: 'sender-private@example.test' }]
-    })
+    }, sensitiveDataKeysFromEnv(env))
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: 'mail-id' }))
 
     const response = await postJson(env, '/api/admin/mail/test', {

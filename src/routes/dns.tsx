@@ -2,17 +2,20 @@ import type { Hono } from 'hono'
 import { getCurrentSession } from '../auth'
 import { getSettings } from '../services/settings'
 import {
+  beginRecordUpdate,
   countRecordsByUser,
+  deleteRecordRow,
+  finalizeRecordSync,
   findRecordByHostName,
   findRecordById,
   findUserById,
-  insertRecord,
+  insertPendingRecord,
+  markRecordSyncError,
+  persistRecordRemoteIds,
   resolveMinSubdomainLength,
-  resolveUserRecordLimit,
-  updateRecordTarget
+  resolveUserRecordLimit
 } from '../services/dns-records'
 import {
-  cleanupCloudflareDnsRecords,
   createDnsRecord,
   deleteCloudflareDnsRecord,
   deleteRecordAndCloudflare,
@@ -20,6 +23,7 @@ import {
   findOccupiedRecords,
   getAllowedDomains,
   getCloudflareApiToken,
+  isCloudflareDnsError,
   parseCreateDnsRequest,
   parseUpdateDnsRequest,
   toDnsFailureEvent,
@@ -33,6 +37,7 @@ import {
   logDnsExternalServiceFailure,
   safeDnsClientMessage
 } from '../lib/external-service-security'
+import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
 
 
 async function requireDnsMutationAuth(c: any): Promise<Response | null> {
@@ -57,10 +62,27 @@ function dnsExternalErrorResponse(
   return c.json({ success: false, message: safeDnsClientMessage(event.code) }, 500)
 }
 
+function remoteRecordByNameAndType<T extends { name: string; type: string }>(
+  records: T[],
+  name: string,
+  type: string
+): T | null {
+  const expectedName = name.toLowerCase().replace(/\.$/, '')
+  const expectedType = type.toUpperCase()
+  return records.find((record) =>
+    record.name.toLowerCase().replace(/\.$/, '') === expectedName &&
+    record.type.toUpperCase() === expectedType
+  ) ?? null
+}
+
+function syncErrorCode(error: unknown, stage: Parameters<typeof toDnsFailureEvent>[1]): string {
+  return toDnsFailureEvent(error, stage).code
+}
+
 export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/api/domains', async (c) => {
     const domains = getAllowedDomains(c.env)
-    const settings = await getSettings(c.env.DB)
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     const session = await getCurrentSession(c.env, c.req.raw.headers)
     let recordLimit: number | null = null
     let minSubdomainLength = Math.max(0, settings.min_subdomain_length)
@@ -112,7 +134,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         return c.json({ success: false, message: DNS_CONFIG_SAFE_MESSAGE }, 500)
       }
 
-      const settings = await getSettings(c.env.DB)
+      const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
       const minLen = resolveMinSubdomainLength(userRow, settings.min_subdomain_length)
       const subdomainInput = String((body as Record<string, unknown>).subdomain ?? '').trim()
       if (minLen > 0 && subdomainInput.length < minLen) {
@@ -142,64 +164,105 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       const hostName = subdomain + '.' + rootDomain
       const srvName = '_minecraft._tcp.' + hostName
 
-      const existing = await findRecordByHostName(c.env.DB, hostName)
-      if (existing) {
-        return c.json(
-          {
-            success: false,
-            code: 'record_occupied',
-            message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
-          },
-          409
-        )
+      let row = await findRecordByHostName(c.env.DB, hostName)
+      let isNewReservation = false
+      if (row) {
+        const canResume = row.user_id === userId && row.sync_status !== 'active' &&
+          row.pending_server_address === null && row.pending_port === null &&
+          row.pending_target_type === null && row.server_address === serverAddress &&
+          Number(row.port) === port && row.target_type === targetRecordType
+        if (!canResume) {
+          return c.json(
+            {
+              success: false,
+              code: 'record_occupied',
+              message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
+            },
+            409
+          )
+        }
+      } else {
+        try {
+          row = await insertPendingRecord(c.env.DB, {
+            user_id: userId,
+            root_domain: rootDomain,
+            subdomain,
+            host_name: hostName,
+            server_address: serverAddress,
+            port,
+            target_type: targetRecordType
+          })
+          isNewReservation = true
+        } catch (error) {
+          const concurrent = await findRecordByHostName(c.env.DB, hostName)
+          if (concurrent) {
+            return c.json({
+              success: false,
+              code: 'record_occupied',
+              message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
+            }, 409)
+          }
+          throw error
+        }
       }
 
-      const zoneId = await fetchZoneId(token, rootDomain)
-      const occupiedRecords = await findOccupiedRecords(token, zoneId, [hostName, srvName])
-      if (occupiedRecords.length > 0) {
-        return c.json(
-          {
-            success: false,
-            code: 'record_occupied',
-            message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
-          },
-          409
-        )
-      }
-
-      let targetRecordId: string | null = null
-      let srvRecordId: string | null = null
       try {
-        const targetRecord = await createDnsRecord(token, zoneId, {
+        const zoneId = await fetchZoneId(token, rootDomain)
+        const occupiedRecords = await findOccupiedRecords(token, zoneId, [hostName, srvName])
+        if (isNewReservation && occupiedRecords.length > 0) {
+          await deleteRecordRow(c.env.DB, row.id)
+          return c.json({
+            success: false,
+            code: 'record_occupied',
+            message: '域名 ' + hostName + ' 已被占用，请换一个子域名'
+          }, 409)
+        }
+
+        let targetRecord = remoteRecordByNameAndType(occupiedRecords, hostName, targetRecordType)
+        const targetBody = {
           type: targetRecordType,
           name: hostName,
           content: serverAddress,
-          ttl: 1,
-          proxied: false
-        })
-        targetRecordId = targetRecord.id
+          ttl: 1 as const,
+          proxied: false as const
+        }
+        if (targetRecord && !isNewReservation) {
+          targetRecord = await updateDnsRecord(token, zoneId, targetRecord.id, targetBody)
+        } else if (!targetRecord && !isNewReservation && row.target_record_id) {
+          try {
+            targetRecord = await updateDnsRecord(token, zoneId, row.target_record_id, targetBody)
+          } catch (error) {
+            if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+          }
+        }
+        if (!targetRecord) {
+          targetRecord = await createDnsRecord(token, zoneId, targetBody)
+        }
+        await persistRecordRemoteIds(c.env.DB, row.id, { target_record_id: targetRecord.id })
 
-        const srvRecord = await createDnsRecord(token, zoneId, {
-          type: 'SRV',
+        let srvRecord = remoteRecordByNameAndType(occupiedRecords, srvName, 'SRV')
+        const srvBody = {
+          type: 'SRV' as const,
           name: srvName,
-          ttl: 1,
+          ttl: 1 as const,
           data: { priority: 0, weight: 5, port, target: hostName }
-        })
-        srvRecordId = srvRecord.id
+        }
+        if (srvRecord && !isNewReservation) {
+          srvRecord = await updateDnsRecord(token, zoneId, srvRecord.id, srvBody)
+        } else if (!srvRecord && !isNewReservation && row.srv_record_id) {
+          try {
+            srvRecord = await updateDnsRecord(token, zoneId, row.srv_record_id, srvBody)
+          } catch (error) {
+            if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+          }
+        }
+        if (!srvRecord) {
+          srvRecord = await createDnsRecord(token, zoneId, srvBody)
+        }
+        await persistRecordRemoteIds(c.env.DB, row.id, { srv_record_id: srvRecord.id })
+        row = (await finalizeRecordSync(c.env.DB, row.id))!
 
-        const row = await insertRecord(c.env.DB, {
-          user_id: userId,
-          root_domain: rootDomain,
-          subdomain,
-          host_name: hostName,
-          server_address: serverAddress,
-          port,
-          target_type: targetRecordType,
-          target_record_id: targetRecord.id,
-          srv_record_id: srvRecord.id
-        })
-
-        // Re-check after insert so concurrent creates cannot exceed the user limit.
+        // Re-check after reservation so concurrent creates cannot exceed the user limit.
         const currentCount = await countRecordsByUser(c.env.DB, userId)
         if (userRecordLimit > 0 && currentCount > userRecordLimit) {
           await deleteRecordAndCloudflare(c.env, row)
@@ -227,8 +290,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
           records: { target: targetRecord, srv: srvRecord }
         })
       } catch (err) {
-        // Roll back any Cloudflare records created before DB insert / later step failed.
-        await cleanupCloudflareDnsRecords(token, zoneId, [targetRecordId, srvRecordId])
+        await markRecordSyncError(c.env.DB, row.id, syncErrorCode(err, 'record_create'))
         throw err
       }
     } catch (err) {
@@ -254,7 +316,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       }
       await deleteRecordAndCloudflare(c.env, record)
       const currentCount = await countRecordsByUser(c.env.DB, session.user.id)
-      const settings = await getSettings(c.env.DB)
+      const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
       const userRow = await findUserById(c.env.DB, session.user.id)
       const recordLimit = resolveUserRecordLimit(userRow, settings.max_records_per_user)
       return c.json({
@@ -300,6 +362,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       }
 
       if (
+        record.sync_status === 'active' &&
         record.server_address === serverAddress &&
         Number(record.port) === port &&
         record.target_type === targetRecordType
@@ -317,63 +380,114 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         return c.json({ success: false, message: DNS_CONFIG_SAFE_MESSAGE }, 500)
       }
 
-      const zoneId = await fetchZoneId(token, record.root_domain)
       const hostName = record.host_name
       const srvName = '_minecraft._tcp.' + hostName
-
-      let targetRecordId = record.target_record_id
-      let srvRecordId = record.srv_record_id
-      let createdTargetId: string | null = null
-      let createdSrvId: string | null = null
+      const syncingRecord = await beginRecordUpdate(c.env.DB, record.id, {
+        server_address: serverAddress,
+        port,
+        target_type: targetRecordType
+      })
+      if (!syncingRecord) {
+        return c.json({ success: false, message: '记录不存在' }, 404)
+      }
 
       try {
-        if (record.target_type === targetRecordType) {
-          await updateDnsRecord(token, zoneId, record.target_record_id, {
+        const zoneId = await fetchZoneId(token, record.root_domain)
+        let occupiedRecords = await findOccupiedRecords(token, zoneId, [hostName, srvName])
+        let targetRecord = remoteRecordByNameAndType(occupiedRecords, hostName, targetRecordType)
+
+        if (record.target_type !== targetRecordType && !targetRecord) {
+          const oldIds = occupiedRecords
+            .filter((item) =>
+              item.name.toLowerCase().replace(/\.$/, '') === hostName &&
+              ['A', 'AAAA', 'CNAME'].includes(item.type.toUpperCase())
+            )
+            .map((item) => item.id)
+          if (record.target_record_id) oldIds.push(record.target_record_id)
+          for (const oldId of [...new Set(oldIds)]) {
+            await deleteCloudflareDnsRecord(token, zoneId, oldId)
+          }
+          await persistRecordRemoteIds(c.env.DB, record.id, { target_record_id: '' })
+        }
+
+        if (targetRecord) {
+          targetRecord = await updateDnsRecord(token, zoneId, targetRecord.id, {
             type: targetRecordType,
             name: hostName,
             content: serverAddress,
             ttl: 1,
             proxied: false
           })
+        } else if (record.target_type === targetRecordType && record.target_record_id) {
+          try {
+            targetRecord = await updateDnsRecord(token, zoneId, record.target_record_id, {
+              type: targetRecordType,
+              name: hostName,
+              content: serverAddress,
+              ttl: 1,
+              proxied: false
+            })
+          } catch (error) {
+            if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+            targetRecord = await createDnsRecord(token, zoneId, {
+              type: targetRecordType,
+              name: hostName,
+              content: serverAddress,
+              ttl: 1,
+              proxied: false
+            })
+          }
         } else {
-          // Cloudflare does not allow A/AAAA/CNAME to coexist on the same name.
-          // Delete the old target first, then create the new type.
-          await deleteCloudflareDnsRecord(token, zoneId, record.target_record_id)
-          const created = await createDnsRecord(token, zoneId, {
+          targetRecord = await createDnsRecord(token, zoneId, {
             type: targetRecordType,
             name: hostName,
             content: serverAddress,
             ttl: 1,
             proxied: false
           })
-          createdTargetId = created.id
-          targetRecordId = created.id
         }
+        await persistRecordRemoteIds(c.env.DB, record.id, { target_record_id: targetRecord.id })
 
-        if (srvRecordId) {
-          await updateDnsRecord(token, zoneId, srvRecordId, {
+        occupiedRecords = await findOccupiedRecords(token, zoneId, [srvName])
+        let srvRecord = remoteRecordByNameAndType(occupiedRecords, srvName, 'SRV')
+        if (srvRecord) {
+          srvRecord = await updateDnsRecord(token, zoneId, srvRecord.id, {
             type: 'SRV',
             name: srvName,
             ttl: 1,
             data: { priority: 0, weight: 5, port, target: hostName }
           })
+        } else if (record.srv_record_id) {
+          try {
+            srvRecord = await updateDnsRecord(token, zoneId, record.srv_record_id, {
+              type: 'SRV',
+              name: srvName,
+              ttl: 1,
+              data: { priority: 0, weight: 5, port, target: hostName }
+            })
+          } catch (error) {
+            if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+            srvRecord = await createDnsRecord(token, zoneId, {
+              type: 'SRV',
+              name: srvName,
+              ttl: 1,
+              data: { priority: 0, weight: 5, port, target: hostName }
+            })
+          }
         } else {
-          const srvRecord = await createDnsRecord(token, zoneId, {
+          srvRecord = await createDnsRecord(token, zoneId, {
             type: 'SRV',
             name: srvName,
             ttl: 1,
             data: { priority: 0, weight: 5, port, target: hostName }
           })
-          createdSrvId = srvRecord.id
-          srvRecordId = srvRecord.id
         }
+        await persistRecordRemoteIds(c.env.DB, record.id, { srv_record_id: srvRecord.id })
 
-        const updated = await updateRecordTarget(c.env.DB, record.id, {
+        const updated = await finalizeRecordSync(c.env.DB, record.id, {
           server_address: serverAddress,
           port,
-          target_type: targetRecordType,
-          target_record_id: targetRecordId,
-          srv_record_id: srvRecordId
+          target_type: targetRecordType
         })
 
         return c.json({
@@ -382,8 +496,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
           record: updated
         })
       } catch (err) {
-        // Best-effort cleanup for records created during this update attempt.
-        await cleanupCloudflareDnsRecords(token, zoneId, [createdTargetId, createdSrvId])
+        await markRecordSyncError(c.env.DB, record.id, syncErrorCode(err, 'record_update'))
         throw err
       }
     } catch (err) {

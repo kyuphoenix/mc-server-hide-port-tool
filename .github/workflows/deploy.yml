@@ -3,6 +3,9 @@ name: Deploy to Cloudflare Workers
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -11,70 +14,139 @@ jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5c # v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
+          cache: pnpm
+
+      - name: Validate deployment inputs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_DOMAINS_API_TOKEN: ${{ secrets.CLOUDFLARE_DOMAINS_API_TOKEN }}
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
+          DATA_ENCRYPTION_KEY_PREVIOUS: ${{ secrets.DATA_ENCRYPTION_KEY_PREVIOUS }}
+          OAUTH_ALLOWED_HOSTS: ${{ vars.OAUTH_ALLOWED_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_DOMAINS_API_TOKEN BETTER_AUTH_URL BETTER_AUTH_SECRET DATA_ENCRYPTION_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required GitHub Actions secret: $name" >&2
+              exit 1
+            fi
+          done
+          if [ "${#BETTER_AUTH_SECRET}" -lt 32 ] || [ "$BETTER_AUTH_SECRET" = "better-auth-secret-12345678901234567890" ]; then
+            echo "BETTER_AUTH_SECRET must be a private random value of at least 32 characters" >&2
+            exit 1
+          fi
+          if [ "${#DATA_ENCRYPTION_KEY}" -lt 32 ] || [ "$DATA_ENCRYPTION_KEY" = "replace_with_an_independent_long_random_string" ]; then
+            echo "DATA_ENCRYPTION_KEY must be a private random value of at least 32 characters" >&2
+            exit 1
+          fi
+          if [ "$DATA_ENCRYPTION_KEY" = "$BETTER_AUTH_SECRET" ]; then
+            echo "DATA_ENCRYPTION_KEY must be independent from BETTER_AUTH_SECRET" >&2
+            exit 1
+          fi
+          if [ -n "${DATA_ENCRYPTION_KEY_PREVIOUS:-}" ] && [ "${#DATA_ENCRYPTION_KEY_PREVIOUS}" -lt 32 ]; then
+            echo "DATA_ENCRYPTION_KEY_PREVIOUS must contain at least 32 characters when set" >&2
+            exit 1
+          fi
+          if [ -n "${DATA_ENCRYPTION_KEY_PREVIOUS:-}" ] && [ "$DATA_ENCRYPTION_KEY_PREVIOUS" = "$DATA_ENCRYPTION_KEY" ]; then
+            echo "DATA_ENCRYPTION_KEY_PREVIOUS must differ from DATA_ENCRYPTION_KEY" >&2
+            exit 1
+          fi
+          node <<'NODE'
+          const raw = process.env.BETTER_AUTH_URL.trim()
+          const url = new URL(raw)
+          if (url.protocol !== 'https:' || raw !== url.origin) {
+            throw new Error('BETTER_AUTH_URL must be an HTTPS origin without a path, query, or fragment')
+          }
+          const allowlist = (process.env.OAUTH_ALLOWED_HOSTS || '').trim()
+          if (allowlist) {
+            for (const pattern of allowlist.split(',').map((value) => value.trim()).filter(Boolean)) {
+              if (!/^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(pattern)) {
+                throw new Error(`Invalid OAUTH_ALLOWED_HOSTS pattern: ${pattern}`)
+              }
+            }
+          }
+          NODE
+          parsed="$(python scripts/parse_domain_tokens.py "$CLOUDFLARE_DOMAINS_API_TOKEN")"
+          if [ -z "$(printf '%s' "$parsed" | sed -n '1p')" ]; then
+            echo "CLOUDFLARE_DOMAINS_API_TOKEN contains no valid domain/token pairs" >&2
+            exit 1
+          fi
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build dynamic var/secret lists
+      - name: Build static assets
+        run: pnpm build
+
+      - name: Validate migration compatibility
+        run: pnpm run validate:migrations
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Validate Worker bundle
+        run: pnpm exec wrangler deploy --dry-run
+
+      - name: Build deployment var and secret lists
         id: lists
         env:
-          # CLOUDFLARE_DOMAINS_API_TOKEN 同时承担两件事：
-          #   1) 解析出每个根域名的 Cloudflare API Token，注入为 worker secret
-          #   2) 解析出域名清单，覆盖到 worker 的 DOMAINS 普通环境变量
           CLOUDFLARE_DOMAINS_API_TOKEN: ${{ secrets.CLOUDFLARE_DOMAINS_API_TOKEN }}
-          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          DATA_ENCRYPTION_KEY_PREVIOUS: ${{ secrets.DATA_ENCRYPTION_KEY_PREVIOUS }}
         run: |
           set -euo pipefail
-          # 解析 CLOUDFLARE_DOMAINS_API_TOKEN：line1 名单、line2 JSON 值、line3 域名数组
           out="$(python scripts/parse_domain_tokens.py "$CLOUDFLARE_DOMAINS_API_TOKEN")"
-          secret_names="$(printf '%s' "$out" | sed -n '1p')"
-          values_json="$(printf '%s' "$out" | sed -n '2p')"
           domains_json="$(printf '%s' "$out" | sed -n '3p')"
-          printf '%s' "$values_json" > /tmp/domain_tokens.json
-          # 用解析得到的域名数组覆盖 DOMAINS
           echo "domains=$domains_json" >> "$GITHUB_OUTPUT"
           {
             echo "vars<<LIST_EOF"
             echo "DOMAINS"
-            [ -n "${BETTER_AUTH_URL:-}" ] && echo "BETTER_AUTH_URL"
+            echo "BETTER_AUTH_URL"
+            echo "OAUTH_ALLOWED_HOSTS"
             echo "LIST_EOF"
           } >> "$GITHUB_OUTPUT"
           {
             echo "secrets<<LIST_EOF"
-            [ -n "${BETTER_AUTH_SECRET:-}" ] && echo "BETTER_AUTH_SECRET"
+            echo "BETTER_AUTH_SECRET"
+            echo "DATA_ENCRYPTION_KEY"
+            if [ -n "${DATA_ENCRYPTION_KEY_PREVIOUS:-}" ]; then
+              echo "DATA_ENCRYPTION_KEY_PREVIOUS"
+            fi
+            echo "CLOUDFLARE_DOMAINS_API_TOKEN"
             echo "LIST_EOF"
           } >> "$GITHUB_OUTPUT"
-          # 根域名 token 不走 wrangler-action 的 secrets 字段（其名可能以数字开头，
-          # 不能直接作 env 名），而由 postCommands 中的 wrangler secret put 显式注入。
-          # secret_names 仅用于日志展示。
-          echo "domain_secret_names=$secret_names" >> "$GITHUB_OUTPUT"
-          echo "domain_tokens_json=/tmp/domain_tokens.json" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy Worker (vars + secrets + migrations)
-        uses: cloudflare/wrangler-action@v3
+      - name: Deploy Worker (vars, secrets, and migrations)
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # DOMAINS 用上一步从 CLOUDFLARE_DOMAINS_API_TOKEN 解析出的域名数组覆盖
           DOMAINS: ${{ steps.lists.outputs.domains }}
           BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          DOMAIN_TOKENS_JSON: ${{ steps.lists.outputs.domain_tokens_json }}
+          DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
+          DATA_ENCRYPTION_KEY_PREVIOUS: ${{ secrets.DATA_ENCRYPTION_KEY_PREVIOUS }}
+          CLOUDFLARE_DOMAINS_API_TOKEN: ${{ secrets.CLOUDFLARE_DOMAINS_API_TOKEN }}
+          OAUTH_ALLOWED_HOSTS: ${{ vars.OAUTH_ALLOWED_HOSTS }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -83,8 +155,5 @@ jobs:
             node scripts/patch-custom-domain.cjs
             npx wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
           command: deploy --minify
-          postCommands: |
-            # 把每个根域名 token 用 wrangler secret put 注入 worker（值来自动态生成的 JSON）
-            python scripts/put_domain_secrets.py "$DOMAIN_TOKENS_JSON"
           vars: ${{ steps.lists.outputs.vars }}
           secrets: ${{ steps.lists.outputs.secrets }}

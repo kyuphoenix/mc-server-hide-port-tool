@@ -329,8 +329,7 @@ function showToast(message, type = 'success') {
   el.textContent = message;
   root.appendChild(el);
   window.setTimeout(() => {
-    el.style.opacity = '0';
-    el.style.transition = 'opacity 200ms ease';
+    el.classList.add('opacity-0');
     window.setTimeout(() => el.remove(), 220);
   }, 2800);
 }
@@ -581,6 +580,6 @@ function setButtonEnabled(enabled) {
   const button = getButton();
   if (!button) return;
   button.disabled = !enabled;
-  button.style.opacity = enabled ? '1' : '0.6';
-  button.style.cursor = enabled ? 'pointer' : 'not-allowed';
+  button.classList.toggle('opacity-60', !enabled);
+  button.classList.toggle('cursor-not-allowed', !enabled);
 }

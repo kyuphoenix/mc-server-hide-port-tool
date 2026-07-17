@@ -1,4 +1,6 @@
 import type { DnsRecordRow } from './dns-records'
+import { ExternalFetchError, fetchWithPolicy, readTextWithLimit } from '../lib/external-fetch'
+import type { SensitiveDataEnvironment } from './sensitive-data'
 import { deleteRecordRow } from './dns-records'
 import {
   logDnsExternalServiceFailure,
@@ -7,9 +9,11 @@ import {
   type DnsExternalFailureStage
 } from '../lib/external-service-security'
 
-export type Bindings = CloudflareBindings & {
+export type Bindings = CloudflareBindings & SensitiveDataEnvironment & {
   BETTER_AUTH_SECRET?: string
   BETTER_AUTH_URL?: string
+  OAUTH_ALLOWED_HOSTS?: string
+  CLOUDFLARE_DOMAINS_API_TOKEN?: string
 }
 
 type CloudflareError = {
@@ -113,24 +117,29 @@ export async function deleteRecordAndCloudflare(
 ): Promise<void> {
   const token = getCloudflareApiToken(env, record.root_domain)
   if (!token) {
-    logDnsExternalServiceFailure({ code: 'DNS_CONFIG_MISSING', stage: 'record_delete' })
-    await deleteRecordRow(env.DB, record.id)
-    return
+    throw new CloudflareDnsError({
+      code: 'DNS_CONFIG_MISSING',
+      stage: 'record_delete'
+    })
   }
 
-  try {
-    const zoneId = await fetchZoneId(token, record.root_domain)
-    await deleteCloudflareDnsRecord(token, zoneId, record.target_record_id).catch((error) => {
-      logDnsExternalServiceFailure(toDnsFailureEvent(error, 'record_delete'))
+  const zoneId = await fetchZoneId(token, record.root_domain)
+  const srvName = `_minecraft._tcp.${record.host_name}`
+  const discovered = await findOccupiedRecords(token, zoneId, [record.host_name, srvName])
+  const discoveredIds = discovered
+    .filter((item) => {
+      const name = item.name.toLowerCase().replace(/\.$/, '')
+      const type = item.type.toUpperCase()
+      return (
+        (name === record.host_name && ['A', 'AAAA', 'CNAME'].includes(type)) ||
+        (name === srvName && type === 'SRV')
+      )
     })
-    if (record.srv_record_id) {
-      await deleteCloudflareDnsRecord(token, zoneId, record.srv_record_id).catch((error) => {
-        logDnsExternalServiceFailure(toDnsFailureEvent(error, 'record_delete'))
-      })
-    }
-  } catch (error) {
-    logDnsExternalServiceFailure(toDnsFailureEvent(error, 'record_delete'))
-  }
+    .map((item) => item.id)
+
+  const recordIds = [record.target_record_id, record.srv_record_id, ...discoveredIds]
+  const uniqueIds = [...new Set(recordIds.filter((id): id is string => Boolean(id)))]
+  await Promise.all(uniqueIds.map((id) => deleteCloudflareDnsRecord(token, zoneId, id)))
 
   await deleteRecordRow(env.DB, record.id)
 }
@@ -142,7 +151,20 @@ export async function deleteCloudflareDnsRecord(
 ): Promise<void> {
   if (!recordId) return
   const url = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${recordId}`
-  await sendCloudflareRequest(token, url, { method: 'DELETE' }, 'record_delete')
+  try {
+    const data = await sendCloudflareRequest<CloudflareSingleResult<{ id: string }>>(
+      token,
+      url,
+      { method: 'DELETE' },
+      'record_delete'
+    )
+    if (!data.success) {
+      throw new CloudflareDnsError({ code: 'DNS_EXTERNAL_FAILURE', stage: 'record_delete' })
+    }
+  } catch (error) {
+    if (isCloudflareDnsError(error) && error.status === 404) return
+    throw error
+  }
 }
 
 export async function cleanupCloudflareDnsRecords(
@@ -158,11 +180,29 @@ export async function cleanupCloudflareDnsRecords(
 
 
 
+function parseAggregateCloudflareTokens(raw: string | undefined): Map<string, string> {
+  const tokens = new Map<string, string>()
+  if (!raw?.trim()) return tokens
+
+  for (const entry of raw.split(',')) {
+    const separator = entry.indexOf(':')
+    if (separator <= 0) continue
+    const domain = entry.slice(0, separator).trim().toLowerCase().replace(/\.$/, '')
+    const token = entry.slice(separator + 1).trim()
+    if (domain && token && !tokens.has(domain)) tokens.set(domain, token)
+  }
+  return tokens
+}
+
 export function getCloudflareApiToken(env: Bindings, rootDomain: string): string | null {
-  if (!rootDomain) return null
-  const key = `${rootDomain.replace(/\./g, '_')}_CLOUDFLARE_API_TOKEN`
-  const value = (env as unknown as Record<string, string | undefined>)[key]
-  return value && value.trim() ? value.trim() : null
+  const domain = rootDomain.trim().toLowerCase().replace(/\.$/, '')
+  if (!domain) return null
+
+  const key = `${domain.replace(/\./g, '_')}_CLOUDFLARE_API_TOKEN`
+  const legacyValue = (env as unknown as Record<string, string | undefined>)[key]
+  if (legacyValue?.trim()) return legacyValue.trim()
+
+  return parseAggregateCloudflareTokens(env.CLOUDFLARE_DOMAINS_API_TOKEN).get(domain) ?? null
 }
 
 export function getAllowedDomains(env: Bindings): string[] {
@@ -491,11 +531,26 @@ async function sendCloudflareRequest<T>(
   headers.set('Authorization', `Bearer ${token}`)
   headers.set('Content-Type', 'application/json')
 
-  const response = await fetch(url, {
-    ...init,
-    headers
-  })
-  const text = await response.text()
+  let response: Response
+  let text: string
+  try {
+    response = await fetchWithPolicy(url, {
+      ...init,
+      headers
+    }, {
+      timeoutMs: 8_000,
+      retries: 1,
+      retryMethods: ['GET', 'PUT', 'DELETE'],
+      retryStatuses: isRetriableCloudflareStatus
+    })
+    text = await readTextWithLimit(response, 256 * 1024, 8_000)
+  } catch (error) {
+    throw new CloudflareDnsError({
+      code: 'CLOUDFLARE_REQUEST_FAILED',
+      stage,
+      retriable: error instanceof ExternalFetchError && error.code !== 'EXTERNAL_RESPONSE_TOO_LARGE'
+    })
+  }
   const data = parseJsonResponse<T>(text)
 
   if (!response.ok) {

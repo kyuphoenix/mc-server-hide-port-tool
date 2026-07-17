@@ -298,8 +298,25 @@ function renderInvitesTab(data) {
   </section>`;
 }
 
+function renderPagination(kind, pagination) {
+  const page = Number(pagination?.page || 1);
+  const totalPages = Number(pagination?.totalPages || 1);
+  const total = Number(pagination?.total || 0);
+  const previousDisabled = page <= 1;
+  const nextDisabled = page >= totalPages;
+  const buttonClass = 'inline-flex items-center justify-center w-9 h-9 border rounded-md text-sm transition disabled:opacity-40 disabled:cursor-not-allowed';
+  return `<div class="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-800 bg-slate-900/30">
+    <span class="text-xs text-slate-500">第 ${page} / ${totalPages} 页，共 ${total} 条</span>
+    <div class="flex items-center gap-2">
+      <button type="button" data-admin-page="${kind}" data-page="${page - 1}" aria-label="上一页" title="上一页" ${previousDisabled ? 'disabled' : ''} class="${buttonClass} border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:border-slate-500">&larr;</button>
+      <button type="button" data-admin-page="${kind}" data-page="${page + 1}" aria-label="下一页" title="下一页" ${nextDisabled ? 'disabled' : ''} class="${buttonClass} border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:border-slate-500">&rarr;</button>
+    </div>
+  </div>`;
+}
+
 function renderUsersTab(data) {
   const users = data.users || [];
+  const pagination = data.userPagination || { total: users.length, page: 1, totalPages: 1 };
   const s = data.settings || {};
   const currentUserId = data.currentUserId;
   const isSuper = !!data.currentUserSuperAdmin;
@@ -309,7 +326,7 @@ function renderUsersTab(data) {
   return `
   <section class="bg-slate-900/40 border border-slate-800 rounded-lg p-6 sm:p-8">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-3 border-b border-slate-800">
-      <h3 class="text-lg font-bold text-white">用户管理 (${users.length})</h3>
+      <h3 class="text-lg font-bold text-white">用户管理 (${pagination.total})</h3>
       <p class="text-xs text-slate-500">邮箱已脱敏显示；搜索时请输入完整邮箱，后端按明文匹配后返回脱敏结果。</p>
     </div>
     <div id="users-alert">${alertBox('error', data.createError)}</div>
@@ -380,15 +397,17 @@ function renderUsersTab(data) {
           </tbody>
         </table>
       </div>
+      ${renderPagination('users', pagination)}
     </div>
   </section>`;
 }
 
 function renderDnsTab(data) {
   const records = data.records || [];
+  const pagination = data.dnsPagination || { total: records.length, page: 1, totalPages: 1 };
   return `
   <section class="bg-slate-900/40 border border-slate-800 rounded-lg p-6 sm:p-8">
-    <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800"><h3 class="text-lg font-bold text-white">全局 DNS 记录 (${records.length})</h3></div>
+    <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-800"><h3 class="text-lg font-bold text-white">全局 DNS 记录 (${pagination.total})</h3></div>
     <div class="bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
       <div class="overflow-x-auto">
         <table class="w-full text-sm text-left border-collapse">
@@ -411,6 +430,7 @@ function renderDnsTab(data) {
           </tbody>
         </table>
       </div>
+      ${renderPagination('dns', pagination)}
     </div>
   </section>`;
 }
@@ -443,8 +463,13 @@ async function loadAdmin(tab, flash = {}) {
     const role = (flash.usersQuery && flash.usersQuery.role)
       ? flash.usersQuery.role
       : (state && state.usersQuery && state.usersQuery.role) || 'all';
+    const userPage = Number(flash.userPage || state?.userPagination?.page || 1);
     if (q) params.set('q', q);
     if (role && role !== 'all') params.set('role', role);
+    if (userPage > 1) params.set('user_page', String(userPage));
+  } else if (active === 'dns') {
+    const dnsPage = Number(flash.dnsPage || state?.dnsPagination?.page || 1);
+    if (dnsPage > 1) params.set('dns_page', String(dnsPage));
   }
   const { res, data } = await apiGet(`/api/pages/admin?${params.toString()}`);
   if (data?.redirect) { window.location.href = data.redirect; return; }
@@ -574,14 +599,14 @@ function bindMailHelpers() {
     const m = document.getElementById(id);
     if (m) {
       m.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
+      document.body.classList.add('overflow-hidden');
     }
   };
   const close = (id) => {
     const m = document.getElementById(id);
     if (m) {
       m.classList.add('hidden');
-      document.body.style.overflow = '';
+      document.body.classList.remove('overflow-hidden');
     }
   };
   document.getElementById('mail-test-open')?.addEventListener('click', (e) => {
@@ -726,11 +751,12 @@ function bindEvents() {
       usersQuery: {
         q: String(obj.q || '').trim(),
         role: String(obj.role || 'all')
-      }
+      },
+      userPage: 1
     });
   });
   document.getElementById('user-search-reset')?.addEventListener('click', async () => {
-    await loadAdmin('users', { usersQuery: { q: '', role: 'all' } });
+    await loadAdmin('users', { usersQuery: { q: '', role: 'all' }, userPage: 1 });
   });
   document.getElementById('user-create-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -746,6 +772,14 @@ function bindEvents() {
     if (!data?.success) showToast(apiMessage(data, '修改失败'), 'error');
     else await loadAdmin('users');
   }));
+  document.querySelectorAll('[data-admin-page]').forEach((btn) => btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    const kind = btn.getAttribute('data-admin-page');
+    const page = Math.max(1, Number(btn.getAttribute('data-page')) || 1);
+    if (kind === 'users') await loadAdmin('users', { userPage: page });
+    else if (kind === 'dns') await loadAdmin('dns', { dnsPage: page });
+  }));
+
   document.querySelectorAll('[data-user-role]').forEach((btn) => btn.addEventListener('click', async () => {
     const { data } = await apiPost(`/api/admin/users/${btn.getAttribute('data-user-role')}/role`, { role: btn.getAttribute('data-role') });
     if (!data?.success) showToast(apiMessage(data, '操作失败'), 'error');
@@ -753,9 +787,30 @@ function bindEvents() {
   }));
   document.querySelectorAll('[data-user-delete]').forEach((btn) => btn.addEventListener('click', async () => {
     if (!confirm('确认删除该用户？将级联删除其所有 DNS 记录和关联会话！')) return;
-    const { data } = await apiPost(`/api/admin/users/${btn.getAttribute('data-user-delete')}/delete`, {});
-    if (!data?.success) showToast(apiMessage(data, '删除失败'), 'error');
-    else await loadAdmin('users');
+    const id = btn.getAttribute('data-user-delete');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.classList.add('opacity-60', 'cursor-wait');
+    try {
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        const { data } = await apiPost(`/api/admin/users/${id}/delete`, {});
+        if (!data?.success) {
+          showToast(apiMessage(data, '删除失败'), 'error');
+          return;
+        }
+        if (data.data?.status === 'completed') {
+          await loadAdmin('users');
+          return;
+        }
+        const delay = data.data?.status === 'processing' ? 1000 : 150;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      showToast('删除任务尚未完成，请重试', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.classList.remove('opacity-60', 'cursor-wait');
+    }
   }));
 
   document.querySelectorAll('[data-dns-delete]').forEach((btn) => btn.addEventListener('click', async () => {

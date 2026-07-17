@@ -37,6 +37,7 @@ async function setupOpen() {
   const env: AuthBindings = {
     DB: instance.db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App'
   }
