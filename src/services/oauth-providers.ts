@@ -141,7 +141,8 @@ export const OAUTH_TEMPLATES: OAuthTemplate[] = [
     token_url: 'https://connect.linux.do/oauth2/token',
     user_info_url: 'https://connect.linux.do/api/user',
     scopes: 'openid,profile,email',
-    pkce: true
+    pkce: true,
+    icon_url: 'https://cdn3.ldstatic.com/original/4X/c/c/d/ccd8c210609d498cbeb3d5201d4c259348447562.png'
   },
   {
     id: 'oidc',
@@ -869,6 +870,28 @@ function assertSafeOAuthRuntimeUrl(raw: string | null, allowedHosts: string | un
   return raw
 }
 
+const SAFE_OAUTH_UPSTREAM_ERROR = /^[A-Za-z0-9_.:-]{1,80}$/
+
+function safeOAuthUpstreamError(raw: Record<string, unknown>, fallback: string): string {
+  const value = nonEmptyString(raw.error) ?? nonEmptyString(raw.error_code) ?? nonEmptyString(raw.code)
+  return value && SAFE_OAUTH_UPSTREAM_ERROR.test(value) ? value : fallback
+}
+
+function logOAuthTokenExchangeFailure(
+  row: OAuthProviderRow,
+  tokenUrl: string,
+  responseStatus: number | null,
+  upstreamError: string
+): void {
+  console.error(JSON.stringify({
+    event: 'oauth_token_exchange_failed',
+    provider_id: row.provider_id,
+    token_host: new URL(tokenUrl).hostname,
+    response_status: responseStatus,
+    upstream_error: upstreamError
+  }))
+}
+
 async function exchangeOAuthCode(
   row: OAuthProviderRow,
   input: OAuthTokenExchangeInput,
@@ -884,27 +907,58 @@ async function exchangeOAuthCode(
   if (row.client_secret) body.set('client_secret', row.client_secret)
   if (input.codeVerifier) body.set('code_verifier', input.codeVerifier)
 
-  const response = await fetchWithPolicy(tokenUrl, {
-    method: 'POST',
-    redirect: 'error',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body
-  }, {
-    timeoutMs: OAUTH_RUNTIME_TIMEOUT_MS,
-    retries: 0
-  })
+  let response: Response
+  try {
+    response = await fetchWithPolicy(tokenUrl, {
+      method: 'POST',
+      redirect: 'error',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'hide-port-tool'
+      },
+      body
+    }, {
+      timeoutMs: OAUTH_RUNTIME_TIMEOUT_MS,
+      retries: 0
+    })
+  } catch (error) {
+    const upstreamError = error instanceof ExternalFetchError && error.code === 'EXTERNAL_REQUEST_TIMEOUT'
+      ? 'request_timeout'
+      : 'request_failed'
+    logOAuthTokenExchangeFailure(row, tokenUrl, null, upstreamError)
+    throw error
+  }
+
+  let raw: Record<string, unknown>
+  try {
+    const text = await readTextWithLimit(response, OAUTH_TOKEN_MAX_BYTES, OAUTH_RUNTIME_TIMEOUT_MS)
+    raw = parseOAuthResponseRecord(text, response.headers.get('content-type'), true)
+  } catch (error) {
+    logOAuthTokenExchangeFailure(row, tokenUrl, response.status, 'invalid_response')
+    throw error
+  }
+
   if (!response.ok) {
-    void response.body?.cancel().catch(() => undefined)
+    logOAuthTokenExchangeFailure(
+      row,
+      tokenUrl,
+      response.status,
+      safeOAuthUpstreamError(raw, 'http_error')
+    )
     throw new ExternalFetchError('EXTERNAL_REQUEST_FAILED')
   }
 
-  const text = await readTextWithLimit(response, OAUTH_TOKEN_MAX_BYTES, OAUTH_RUNTIME_TIMEOUT_MS)
-  const raw = parseOAuthResponseRecord(text, response.headers.get('content-type'), true)
   const accessToken = nonEmptyString(raw.access_token)
-  if (!accessToken) throw new ExternalFetchError('EXTERNAL_REQUEST_FAILED')
+  if (!accessToken) {
+    logOAuthTokenExchangeFailure(
+      row,
+      tokenUrl,
+      response.status,
+      safeOAuthUpstreamError(raw, 'missing_access_token')
+    )
+    throw new ExternalFetchError('EXTERNAL_REQUEST_FAILED')
+  }
 
   return {
     tokenType: nonEmptyString(raw.token_type),

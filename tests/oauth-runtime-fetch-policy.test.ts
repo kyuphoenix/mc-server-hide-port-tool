@@ -78,6 +78,33 @@ describe('OAuth runtime external request policy', () => {
     })
   })
 
+  it('logs a sanitized upstream error when the token endpoint rejects the exchange', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
+      error: 'incorrect_client_credentials',
+      error_description: 'The client_id and/or client_secret passed are incorrect.'
+    }))
+
+    await expect(runtimeConfig().getToken({
+      code: 'sensitive-oauth-code',
+      redirectURI: 'https://app.example/api/auth/oauth2/callback/fixture'
+    })).rejects.toMatchObject({ code: 'EXTERNAL_REQUEST_FAILED' })
+
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    const event = JSON.parse(String(errorSpy.mock.calls[0]?.[0]))
+    expect(event).toMatchObject({
+      event: 'oauth_token_exchange_failed',
+      provider_id: 'fixture',
+      token_host: 'provider.example',
+      response_status: 200,
+      upstream_error: 'incorrect_client_credentials'
+    })
+    const serializedEvent = JSON.stringify(event)
+    expect(serializedEvent).not.toContain('sensitive-oauth-code')
+    expect(serializedEvent).not.toContain('client-secret')
+    expect(serializedEvent).not.toContain('The client_id and/or client_secret passed are incorrect.')
+  })
+
   it('accepts form-encoded token responses', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
       'access_token=form-token&token_type=bearer&scope=openid%20email',
