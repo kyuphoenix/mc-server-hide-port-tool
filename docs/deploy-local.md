@@ -55,8 +55,7 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
 ```
 example_com_CLOUDFLARE_API_TOKEN=...
 example_net_CLOUDFLARE_API_TOKEN=...
-303302_xyz_CLOUDFLARE_API_TOKEN=...
-DOMAINS=["example.com","example.net","303302.xyz"]
+DOMAINS=["example.com","example.net"]
 BETTER_AUTH_SECRET=<独立生成的至少 32 字符随机值>
 DATA_ENCRYPTION_KEY=<另一份独立生成的至少 32 字符随机值>
 # DATA_ENCRYPTION_KEY_PREVIOUS=<仅轮换窗口使用的旧数据密钥>
@@ -76,7 +75,7 @@ BETTER_AUTH_URL=http://localhost:8787
 {
   "vars": {
     "APP_NAME": "hide-port-tool",
-    "DOMAINS": "[\"example.com\",\"example.net\"]",
+    "DOMAINS": "[\"example1.com\",\"example2.com\"]",
     "BETTER_AUTH_URL": "https://mc.example.com",
     "OAUTH_ALLOWED_HOSTS": "accounts.example.com,*.login.example.net"
   }
@@ -101,8 +100,8 @@ pnpm audit --prod
 注入敏感值；`DATA_ENCRYPTION_KEY_PREVIOUS` 只在数据密钥轮换窗口设置：
 
 ```powershell
-pnpm exec wrangler secret put example_com_CLOUDFLARE_API_TOKEN
-pnpm exec wrangler secret put example_net_CLOUDFLARE_API_TOKEN
+pnpm exec wrangler secret put example1_com_CLOUDFLARE_API_TOKEN
+pnpm exec wrangler secret put example2_com_CLOUDFLARE_API_TOKEN
 pnpm exec wrangler secret put BETTER_AUTH_SECRET
 pnpm exec wrangler secret put DATA_ENCRYPTION_KEY
 # pnpm exec wrangler secret put DATA_ENCRYPTION_KEY_PREVIOUS

@@ -108,16 +108,16 @@ CI 部署后 Worker 拥有：
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | `<账户级部署 Token>` |
 | `CLOUDFLARE_ACCOUNT_ID` | `<Account ID>` |
-| `CLOUDFLARE_DOMAINS_API_TOKEN` | `303302.xyz:tok_A,example.com:tok_B` |
-| `BETTER_AUTH_URL` | `https://mc.303302.xyz` |
+| `CLOUDFLARE_DOMAINS_API_TOKEN` | `example1.com:tok_A,example.com:tok_B` |
+| `BETTER_AUTH_URL` | `https://mc.example.com` |
 | `BETTER_AUTH_SECRET` | `<至少 32 字符随机串>` |
 | `DATA_ENCRYPTION_KEY` | `<另一份独立的至少 32 字符随机串>` |
 
 CI 部署后 Worker 拥有：
 
-- 明文 var `DOMAINS = ["303302.xyz","example.com"]`、`BETTER_AUTH_URL`
-- secret `303302_xyz_CLOUDFLARE_API_TOKEN`、`example_com_CLOUDFLARE_API_TOKEN`、`BETTER_AUTH_SECRET`、`DATA_ENCRYPTION_KEY`
-- custom domain `mc.303302.xyz` 绑定到该 Worker
+- 明文 var `DOMAINS = ["example1.com","example2.com"]`、`BETTER_AUTH_URL`
+- secret `example1_com_CLOUDFLARE_API_TOKEN`、`example2_com_CLOUDFLARE_API_TOKEN`、`BETTER_AUTH_SECRET`、`DATA_ENCRYPTION_KEY`
+- custom domain `mc.example.com` 绑定到该 Worker
 
 ### 部署后配置 OAuth
 

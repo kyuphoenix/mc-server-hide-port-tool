@@ -45,3 +45,5 @@ __pycache__/
 _auth_full.txt
 _tmp_passkey/
 _tmp_*/
+
+docs/superpowers/
