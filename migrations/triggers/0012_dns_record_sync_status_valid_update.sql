@@ -1,0 +1,1 @@
+CREATE TRIGGER IF NOT EXISTS "dns_record_sync_status_valid_update" BEFORE UPDATE OF "sync_status" ON "dns_record" WHEN NEW."sync_status" NOT IN ('creating', 'active', 'updating', 'error') BEGIN SELECT RAISE(ABORT, 'invalid dns sync status'); END;

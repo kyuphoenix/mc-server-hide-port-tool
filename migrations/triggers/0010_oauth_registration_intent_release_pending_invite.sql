@@ -1,0 +1,1 @@
+CREATE TRIGGER IF NOT EXISTS "oauth_registration_intent_release_pending_invite" AFTER DELETE ON "oauth_registration_intent" WHEN OLD."authorized_at" IS NULL AND OLD."invite_code_id" IS NOT NULL BEGIN UPDATE "invite_code" SET "reserved_intent_id" = NULL, "reserved_at" = NULL WHERE "id" = OLD."invite_code_id" AND "used_by" IS NULL AND "reserved_intent_id" = OLD."id"; END;

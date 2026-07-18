@@ -25,6 +25,7 @@ pnpm wrangler d1 create mc-server-hide-port-tool-db
 
 ```txt
 pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+node scripts/install-d1-triggers.cjs --remote
 ```
 
 迁移清单：
@@ -44,7 +45,12 @@ pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
 - `0012_dns_sync_state.sql` — DNS pending 变更、同步状态、重试与安全错误码
 - `0013_user_deletion_jobs.sql` — 可恢复用户删除作业、进度与租约字段
 
-本地开发用 `--local` 应用同一套迁移。
+本地开发用 `--local` 应用同一套迁移，并安装本地触发器：
+
+```txt
+pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
+node scripts/install-d1-triggers.cjs --local
+```
 
 ## 配置本地 `.dev.vars`（或生产 Worker secrets）
 
@@ -111,6 +117,7 @@ pnpm exec wrangler secret put DATA_ENCRYPTION_KEY
 
 ```powershell
 pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+node scripts/install-d1-triggers.cjs --remote
 pnpm deploy
 ```
 

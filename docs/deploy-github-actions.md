@@ -4,13 +4,14 @@
 
 ## 流程概览
 
-1. 校验必需 Secrets、密钥独立性、生产 HTTPS origin 与 OAuth 主机白名单
-2. 安装依赖并构建静态资源
-3. 校验迁移向后兼容性，运行全量测试、类型检查与 Wrangler dry-run
-4. 解析 `CLOUDFLARE_DOMAINS_API_TOKEN`，生成 `DOMAINS` 与各域名 DNS token
-5. 创建或对齐 D1，写回 `database_id`，并准备 `BETTER_AUTH_URL` 对应的 custom domain
-6. 在部署新 Worker 前应用全部远端 D1 迁移，包括 `0012_dns_sync_state.sql` 与 `0013_user_deletion_jobs.sql`
-7. 部署 Worker，并一次性注入 vars 与 secrets
+1. 检查必需 Secrets 是否缺失，并通过 Cloudflare API 验证部署 Token 为 active
+2. 安装锁文件指定的依赖
+3. 创建或对齐 D1，写回 `database_id`，并准备 `BETTER_AUTH_URL` 对应的 custom domain
+4. 在部署新 Worker 前应用全部远端 D1 迁移，再逐条幂等安装 D1 触发器
+5. 解析 `CLOUDFLARE_DOMAINS_API_TOKEN`，生成 `DOMAINS` 与各域名 DNS token
+6. 部署 Worker，并一次性注入 vars 与 secrets
+
+部署 workflow 不运行构建、测试、类型检查、迁移兼容检查或 Wrangler dry-run；这些检查应在代码合并或手动触发部署前完成。部署阶段只做必要输入检查、Cloudflare Token 有效性检查、数据库准备和实际发布。
 
 ## 为什么用 `CLOUDFLARE_DOMAINS_API_TOKEN`
 
@@ -77,7 +78,7 @@ example1.com:abc123_your_token_here,example2.com:def456_your_token_here
 
 ## 迁移与发布顺序
 
-workflow 在 `wrangler-action` 的 `preCommands` 中先执行 D1 对齐和远端迁移，再执行 `deploy --minify`。因此 `0012`/`0013` 会在新 Worker 接收请求前生效。迁移兼容校验禁止同一发布删除旧 Worker 仍依赖的表、列、索引或约束。
+workflow 使用独立步骤先执行 D1 对齐和远端迁移，再运行 `scripts/install-d1-triggers.cjs --remote`，最后执行 `deploy --minify`。触发器必须作为单条 SQL 命令安装，以避开 Cloudflare 远端 D1 对迁移批次中多行 `CREATE TRIGGER` 的解析缺陷。任一迁移或触发器安装失败都会阻止 Worker 发布，因此 `0012`/`0013` 会在新 Worker 接收请求前生效。
 
 生产发布前后的备份、监控、回滚与恢复步骤见 [`production-runbook.md`](production-runbook.md)。
 

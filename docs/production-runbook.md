@@ -154,6 +154,7 @@ pnpm exec wrangler d1 time-travel restore mc-server-hide-port-tool-db --bookmark
 
 ```powershell
 pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+node scripts/install-d1-triggers.cjs --remote
 ```
 
 9. 事件关闭后把导出文件移入批准的加密备份位置或按保留策略安全销毁，禁止提交到 Git。

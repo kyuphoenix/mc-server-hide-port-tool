@@ -1,0 +1,1 @@
+CREATE TRIGGER IF NOT EXISTS "first_setup_completed_is_final" BEFORE UPDATE ON "first_setup" WHEN OLD."status" = 'completed' AND NEW."status" <> 'completed' BEGIN SELECT RAISE(ABORT, 'first_setup_completed_is_final'); END;

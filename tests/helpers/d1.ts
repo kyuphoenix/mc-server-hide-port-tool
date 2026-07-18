@@ -43,6 +43,18 @@ export async function applyMigrationFile(db: D1Database, file: string): Promise<
   if (statements.length > 0) {
     await db.batch(statements.map((statement) => db.prepare(statement)))
   }
+  await applyTriggerFiles(db, file.slice(0, 4))
+}
+
+async function applyTriggerFiles(db: D1Database, migrationNumber: string): Promise<void> {
+  const dir = resolve(process.cwd(), 'migrations', 'triggers')
+  const files = (await readdir(dir))
+    .filter((name) => name.startsWith(`${migrationNumber}_`) && name.endsWith('.sql'))
+    .sort()
+  for (const file of files) {
+    const sql = (await readFile(resolve(dir, file), 'utf8')).trim()
+    await db.prepare(sql).run()
+  }
 }
 
 export async function applyMigrations(

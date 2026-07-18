@@ -109,6 +109,7 @@ pnpm wrangler d1 create mc-server-hide-port-tool-db
 
 ```txt
 pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
+node scripts/install-d1-triggers.cjs --local
 ```
 
 迁移清单：
@@ -167,8 +168,8 @@ src/
   services/                            # DNS、OAuth、邮件、限流、密钥和删除作业
   styles/app.css                       # Tailwind 输入样式
 public/static/                         # 构建后的 CSS 与浏览器脚本
-scripts/                               # D1/域名部署辅助与迁移兼容校验
-migrations/                            # 0000_init.sql 至 0013_user_deletion_jobs.sql
+scripts/                               # D1/域名部署辅助、触发器安装与迁移兼容校验
+migrations/                            # 0000 至 0013 迁移；triggers/ 为独立幂等触发器
 tests/                                 # Vitest 安全与业务回归测试
 .github/workflows/deploy.yml           # 固定版本 Actions 的生产部署流程
 docs/

@@ -1,12 +1,27 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('production migration execution', () => {
-  it('keeps trigger bodies multiline for the remote D1 SQL parser', async () => {
-    const sql = await readFile('migrations/0012_dns_sync_state.sql', 'utf8')
+  it('keeps triggers out of remote migration batches', async () => {
+    const migrations = (await readdir('migrations'))
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+    const contents = await Promise.all(
+      migrations.map((name) => readFile(`migrations/${name}`, 'utf8'))
+    )
 
-    expect(sql).not.toMatch(/\bBEGIN[^\r\n]+;\s*END;/i)
-    expect(sql.match(/CREATE TRIGGER/gi)).toHaveLength(2)
+    expect(contents.join('\n')).not.toMatch(/\bCREATE\s+TRIGGER\b/i)
+  })
+
+  it('stores every remote trigger as one idempotent SQL command', async () => {
+    const files = (await readdir('migrations/triggers')).sort()
+    expect(files).toHaveLength(7)
+
+    for (const file of files) {
+      const sql = (await readFile(`migrations/triggers/${file}`, 'utf8')).trim()
+      expect(sql).toMatch(/^CREATE TRIGGER IF NOT EXISTS\b/)
+      expect(sql).toMatch(/\bBEGIN\b.*\bEND;$/)
+      expect(sql).not.toMatch(/[\r\n]/)
+    }
   })
 
   it('uses the lockfile-pinned Wrangler for remote migrations', async () => {
@@ -19,6 +34,8 @@ describe('production migration execution', () => {
       'npx wrangler d1 migrations apply mc-server-hide-port-tool-db --remote'
     )
     expect(workflow).toContain('name: Apply remote D1 migrations')
+    expect(workflow).toContain('name: Install remote D1 triggers')
+    expect(workflow).toContain('node scripts/install-d1-triggers.cjs --remote')
     expect(workflow).not.toContain('preCommands:')
   })
 
