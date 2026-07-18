@@ -1,6 +1,7 @@
 import type { Hono } from 'hono'
 import { createAuth, getCurrentUser } from '../auth'
 import { listPublicOAuthProviders } from '../services/oauth-providers'
+import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
 import { countAuthFactors, listLinkedAccounts } from '../services/user-settings'
 import {
   apiErr,
@@ -60,7 +61,11 @@ export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>) {
     const providerId = String(body.provider_id ?? '').trim()
     if (!providerId) return apiErr(c, "请选择要绑定的 OAuth 应用")
 
-    const providers = await listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS)
+    const providers = await listPublicOAuthProviders(
+      c.env.DB,
+      sensitiveDataKeysFromEnv(c.env),
+      c.env.OAUTH_ALLOWED_HOSTS
+    )
     if (!providers.some((p) => p.provider_id === providerId)) {
       return apiErr(c, "该 OAuth 应用不可用或未启用")
     }

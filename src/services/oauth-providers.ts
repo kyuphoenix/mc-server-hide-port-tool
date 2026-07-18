@@ -542,6 +542,14 @@ async function loadEnabledOAuthProviders(db: D1Database): Promise<OAuthProviderR
   return result.results ?? []
 }
 
+function logRuntimeProviderRejected(row: OAuthProviderRow, reason: string): void {
+  console.error(JSON.stringify({
+    event: 'oauth_provider_runtime_rejected',
+    provider_id: row.id,
+    reason
+  }))
+}
+
 export async function listEnabledOAuthProviders(
   db: D1Database,
   keys: SensitiveDataKeySource,
@@ -550,20 +558,25 @@ export async function listEnabledOAuthProviders(
   const rows = await getCachedEnabledOAuthProviders<OAuthProviderRow[]>(db, () => loadEnabledOAuthProviders(db))
   const providers: OAuthProviderRow[] = []
   for (const row of rows) {
-    const provider = {
-      ...row,
-      client_secret: await openSensitiveValue(keys, row.client_secret)
+    let provider: OAuthProviderRow
+    try {
+      provider = {
+        ...row,
+        client_secret: await openSensitiveValue(keys, row.client_secret)
+      }
+    } catch {
+      // A single stale or corrupted encrypted secret must not disable every
+      // other OAuth provider configured for the deployment.
+      logRuntimeProviderRejected(row, 'secret_unavailable')
+      continue
     }
+
     const validated = await resolveOAuthProviderInput(
       storedProviderInput(provider, provider.client_secret),
       { requireSecret: true, requireUserInfo: true, allowedHosts, enforceHostAllowlist: true }
     )
     if (!validated.ok) {
-      console.error(JSON.stringify({
-        event: 'oauth_provider_runtime_rejected',
-        provider_id: row.id,
-        reason: 'invalid_configuration'
-      }))
+      logRuntimeProviderRejected(row, 'invalid_configuration')
       continue
     }
     const resolvedProvider: OAuthProviderRow = {
@@ -586,20 +599,14 @@ export async function listEnabledOAuthProviders(
 
 export async function listPublicOAuthProviders(
   db: D1Database,
+  keys: SensitiveDataKeySource,
   allowedHosts?: string
 ): Promise<OAuthProviderPublic[]> {
-  const rows = await getCachedEnabledOAuthProviders<OAuthProviderRow[]>(
-    db,
-    () => loadEnabledOAuthProviders(db)
-  )
-  return rows.filter((row) => {
-    const validated = validateOAuthProviderInput(storedProviderInput(row), {
-      requireSecret: true,
-      allowedHosts,
-      enforceHostAllowlist: true
-    })
-    return validated.ok && !!row.user_info_url
-  }).map((r) => ({
+  // Use the exact same resolved and allowlisted provider set as createAuth().
+  // This keeps login/register pages compatible with providers created before
+  // resolved discovery endpoints were persisted.
+  const rows = await listEnabledOAuthProviders(db, keys, allowedHosts)
+  return rows.map((r) => ({
     provider_id: r.provider_id,
     name: r.name,
     icon_url: r.icon_url ?? null,

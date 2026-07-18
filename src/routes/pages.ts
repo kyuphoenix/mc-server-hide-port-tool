@@ -157,7 +157,11 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const next = safeInternalPath(c.req.query('next'), '/')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, null, { redirect: next })
-    const oauthProviders = await listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS)
+    const oauthProviders = await listPublicOAuthProviders(
+      c.env.DB,
+      sensitiveDataKeysFromEnv(c.env),
+      c.env.OAUTH_ALLOWED_HOSTS
+    )
     return apiOk(c, {
       next,
       oauthProviders,
@@ -173,7 +177,11 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return apiOk(c, null, { redirect: '/' })
     const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
-    const oauthProviders = await listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS)
+    const oauthProviders = await listPublicOAuthProviders(
+      c.env.DB,
+      sensitiveDataKeysFromEnv(c.env),
+      c.env.OAUTH_ALLOWED_HOSTS
+    )
     return apiOk(c, {
       settings: publicSettings(settings),
       oauthProviders,
@@ -202,7 +210,11 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const auth = await createAuth(c.env)
     const [linkedAccounts, availableProviders, passkeys] = await Promise.all([
       listLinkedAccounts(c.env.DB, user.id),
-      listPublicOAuthProviders(c.env.DB, c.env.OAUTH_ALLOWED_HOSTS),
+      listPublicOAuthProviders(
+        c.env.DB,
+        sensitiveDataKeysFromEnv(c.env),
+        c.env.OAUTH_ALLOWED_HOSTS
+      ),
       listPasskeysForUser(auth, c.req.raw.headers)
     ])
     return apiOk(c, {

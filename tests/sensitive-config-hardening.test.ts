@@ -112,6 +112,39 @@ describe('OAuth discovery hardening', () => {
     expect(config.tokenUrl).toBe('https://accounts.example.com/oauth/token')
   })
 
+  it('exposes legacy discovery-only providers on public login pages after resolving endpoints', async () => {
+    const instance = await createTestD1()
+    instances.push(instance)
+    const now = Date.now()
+    await instance.db.prepare(
+      `INSERT INTO oauth_provider
+       (id, provider_id, name, client_id, client_secret, discovery_url,
+        authorization_url, token_url, user_info_url, scopes, pkce, enabled,
+        sort_order, icon_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 1, 1, 0, NULL, ?, ?)`
+    ).bind(
+      'legacy-discovery-provider',
+      'legacy-discovery',
+      'Legacy Discovery',
+      'legacy-client',
+      'legacy-plaintext-secret',
+      'https://accounts.example.com/.well-known/openid-configuration',
+      'openid profile email',
+      now,
+      now
+    ).run()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
+      issuer: 'https://accounts.example.com',
+      authorization_endpoint: 'https://accounts.example.com/oauth/authorize',
+      token_endpoint: 'https://accounts.example.com/oauth/token',
+      userinfo_endpoint: 'https://api.example.com/oauth/userinfo'
+    }))
+
+    await expect(listPublicOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
+      expect.objectContaining({ provider_id: 'legacy-discovery' })
+    ])
+  })
+
   it('rejects discovery documents that return non-allowlisted endpoints', async () => {
     const instance = await createTestD1()
     instances.push(instance)
@@ -175,6 +208,44 @@ describe('sensitive configuration encryption', () => {
     expect(runtime[0]?.client_secret).toBe('client-secret-value')
   })
 
+  it('keeps valid OAuth providers available when another stored secret cannot be decrypted', async () => {
+    const instance = await createTestD1()
+    instances.push(instance)
+
+    const created = await createOAuthProvider(instance.db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
+    expect(created.ok).toBe(true)
+
+    const now = Date.now()
+    await instance.db.prepare(
+      `INSERT INTO oauth_provider
+       (id, provider_id, name, client_id, client_secret, discovery_url,
+        authorization_url, token_url, user_info_url, scopes, pkce, enabled,
+        sort_order, icon_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 1, 1, 1, NULL, ?, ?)`
+    ).bind(
+      'corrupted-provider',
+      'corrupted-provider',
+      'Corrupted Provider',
+      'corrupted-client',
+      'enc:v1:not-valid-ciphertext',
+      'https://accounts.example.com/oauth/authorize',
+      'https://accounts.example.com/oauth/token',
+      'https://api.example.com/oauth/userinfo',
+      'openid profile email',
+      now,
+      now
+    ).run()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
+      expect.objectContaining({ provider_id: 'secure-provider' })
+    ])
+    await expect(listPublicOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
+      expect.objectContaining({ provider_id: 'secure-provider' })
+    ])
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('secret_unavailable'))
+  })
+
   it('rejects enabled providers whose stored endpoints are tampered with', async () => {
     const instance = await createTestD1()
     instances.push(instance)
@@ -189,7 +260,7 @@ describe('sensitive configuration encryption', () => {
     ).run()
 
     expect(await listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).toEqual([])
-    expect(await listPublicOAuthProviders(instance.db, TEST_OAUTH_HOSTS)).toEqual([])
+    expect(await listPublicOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).toEqual([])
   })
   it('migrates a legacy plaintext OAuth secret when updating without replacing it', async () => {
     const instance = await createTestD1()
