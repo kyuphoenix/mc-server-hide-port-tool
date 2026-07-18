@@ -47,4 +47,14 @@ describe('production migration execution', () => {
       'cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4'
     )
   })
+
+  it('only injects the optional OAuth host allowlist when configured', async () => {
+    const workflow = await readFile('.github/workflows/deploy.yml', 'utf8')
+
+    expect(workflow).toContain('OAUTH_ALLOWED_HOSTS: ${{ vars.OAUTH_ALLOWED_HOSTS }}')
+    expect(workflow).toMatch(/if \[ -n ["']?\$\{OAUTH_ALLOWED_HOSTS:-\}["']? \]; then/)
+    expect(workflow).not.toMatch(
+      /echo ["']BETTER_AUTH_URL["']\s+echo ["']OAUTH_ALLOWED_HOSTS["']/
+    )
+  })
 })
