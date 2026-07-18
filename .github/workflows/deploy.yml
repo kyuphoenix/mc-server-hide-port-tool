@@ -62,6 +62,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Ensure D1 database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/ensure-d1-and-writeback.cjs
+
+      - name: Configure custom domain
+        env:
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+        run: node scripts/patch-custom-domain.cjs
+
+      - name: Apply remote D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+
       - name: Build deployment var and secret lists
         id: lists
         env:
@@ -90,8 +107,8 @@ jobs:
             echo "LIST_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Deploy Worker (vars, secrets, and migrations)
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+      - name: Deploy Worker (vars and secrets)
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -105,10 +122,8 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          preCommands: |
-            node scripts/ensure-d1-and-writeback.cjs
-            node scripts/patch-custom-domain.cjs
-            pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+          packageManager: pnpm
+          wranglerVersion: "4.108.0"
           command: deploy --minify
           vars: ${{ steps.lists.outputs.vars }}
           secrets: ${{ steps.lists.outputs.secrets }}

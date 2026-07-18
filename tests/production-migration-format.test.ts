@@ -18,5 +18,15 @@ describe('production migration execution', () => {
     expect(workflow).not.toContain(
       'npx wrangler d1 migrations apply mc-server-hide-port-tool-db --remote'
     )
+    expect(workflow).toContain('name: Apply remote D1 migrations')
+    expect(workflow).not.toContain('preCommands:')
+  })
+
+  it('uses the Node 24 Wrangler Action release', async () => {
+    const workflow = await readFile('.github/workflows/deploy.yml', 'utf8')
+
+    expect(workflow).toContain(
+      'cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4'
+    )
   })
 })
