@@ -195,6 +195,15 @@ const OAUTH_DISCOVERY_MAX_BYTES = 64 * 1024
 const OAUTH_RUNTIME_TIMEOUT_MS = 5_000
 const OAUTH_TOKEN_MAX_BYTES = 128 * 1024
 const OAUTH_USER_INFO_MAX_BYTES = 256 * 1024
+const OAUTH_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+
+function isOAuthRedirectResponse(response: Response): boolean {
+  return String(response.type) === 'opaqueredirect' || OAUTH_REDIRECT_STATUSES.has(response.status)
+}
+
+function cancelOAuthResponseBody(response: Response): void {
+  void response.body?.cancel().catch(() => undefined)
+}
 
 type OAuthValidationOptions = {
   requireSecret?: boolean
@@ -403,12 +412,16 @@ async function fetchOAuthDiscoveryDocument(
 
   const response = await fetchWithPolicy(discoveryUrl, {
     method: 'GET',
-    redirect: 'error',
+    redirect: 'manual',
     headers: { Accept: 'application/json' }
   }, {
     timeoutMs: OAUTH_DISCOVERY_TIMEOUT_MS,
     retries: 1
   })
+  if (isOAuthRedirectResponse(response)) {
+    cancelOAuthResponseBody(response)
+    throw new Error('oauth_discovery_redirect_refused')
+  }
   if (!response.ok) throw new Error('oauth_discovery_request_failed')
   const text = await readTextWithLimit(response, OAUTH_DISCOVERY_MAX_BYTES, OAUTH_DISCOVERY_TIMEOUT_MS)
   const parsed = JSON.parse(text) as OAuthDiscoveryDocument
@@ -911,7 +924,7 @@ async function exchangeOAuthCode(
   try {
     response = await fetchWithPolicy(tokenUrl, {
       method: 'POST',
-      redirect: 'error',
+      redirect: 'manual',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -928,6 +941,17 @@ async function exchangeOAuthCode(
       : 'request_failed'
     logOAuthTokenExchangeFailure(row, tokenUrl, null, upstreamError)
     throw error
+  }
+
+  if (isOAuthRedirectResponse(response)) {
+    cancelOAuthResponseBody(response)
+    logOAuthTokenExchangeFailure(
+      row,
+      tokenUrl,
+      response.status || null,
+      'redirect_refused'
+    )
+    throw new ExternalFetchError('EXTERNAL_REQUEST_FAILED')
   }
 
   let raw: Record<string, unknown>
@@ -991,7 +1015,7 @@ async function fetchOAuthUserInfo(
 
   const response = await fetchWithPolicy(userInfoUrl, {
     method: 'GET',
-    redirect: 'error',
+    redirect: 'manual',
     headers: {
       Accept: 'application/json',
       Authorization: 'Bearer ' + accessToken
@@ -1000,8 +1024,12 @@ async function fetchOAuthUserInfo(
     timeoutMs: OAUTH_RUNTIME_TIMEOUT_MS,
     retries: 1
   })
+  if (isOAuthRedirectResponse(response)) {
+    cancelOAuthResponseBody(response)
+    throw new ExternalFetchError('EXTERNAL_REQUEST_FAILED')
+  }
   if (!response.ok) {
-    void response.body?.cancel().catch(() => undefined)
+    cancelOAuthResponseBody(response)
     throw new ExternalFetchError('EXTERNAL_REQUEST_FAILED')
   }
 

@@ -93,7 +93,7 @@ describe('OAuth discovery hardening', () => {
     expect(created.ok).toBe(true)
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://accounts.example.com/.well-known/openid-configuration',
-      expect.objectContaining({ redirect: 'error' })
+      expect.objectContaining({ redirect: 'manual' })
     )
     const stored = await instance.db.prepare(
       'SELECT authorization_url, token_url, user_info_url FROM oauth_provider WHERE provider_id = ?'

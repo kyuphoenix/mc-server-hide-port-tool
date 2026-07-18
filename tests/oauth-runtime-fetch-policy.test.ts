@@ -66,7 +66,7 @@ describe('OAuth runtime external request policy', () => {
 
     const [url, init] = fetchSpy.mock.calls[0]!
     expect(url).toBe('https://provider.example/token')
-    expect(init).toMatchObject({ method: 'POST', redirect: 'error' })
+    expect(init).toMatchObject({ method: 'POST', redirect: 'manual' })
     const body = init?.body as URLSearchParams
     expect(Object.fromEntries(body)).toEqual({
       grant_type: 'authorization_code',
@@ -76,6 +76,18 @@ describe('OAuth runtime external request policy', () => {
       client_secret: 'client-secret',
       code_verifier: 'verifier'
     })
+  })
+
+  it('uses manual redirect handling because workerd rejects redirect error mode', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (init?.redirect === 'error') throw new TypeError('workerd rejects redirect error mode')
+      return Response.json({ access_token: 'access-token' })
+    })
+
+    await expect(runtimeConfig().getToken({
+      code: 'oauth-code',
+      redirectURI: 'https://app.example/api/auth/oauth2/callback/fixture'
+    })).resolves.toMatchObject({ accessToken: 'access-token' })
   })
 
   it('logs a sanitized upstream error when the token endpoint rejects the exchange', async () => {
@@ -179,7 +191,7 @@ describe('OAuth runtime external request policy', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
       method: 'GET',
-      redirect: 'error',
+      redirect: 'manual',
       headers: expect.objectContaining({ Authorization: 'Bearer access-token' })
     })
   })
