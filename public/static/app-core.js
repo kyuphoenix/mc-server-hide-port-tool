@@ -39,6 +39,19 @@ export function qs(name, fallback = '') {
   return v == null || v === '' ? fallback : v;
 }
 
+export function oauthLoginErrorMessage(search) {
+  const params = new URLSearchParams(search);
+  const errors = params.getAll('error').filter(Boolean);
+
+  if (errors.includes('signup_disabled')) {
+    return '未注册，请先注册账号';
+  }
+  if (params.get('oauth_error') === '1') {
+    return 'OAuth 登录失败';
+  }
+  return errors[0] || '';
+}
+
 export function mount(html) {
   const app = document.getElementById('app');
   if (!app) throw new Error('missing #app');

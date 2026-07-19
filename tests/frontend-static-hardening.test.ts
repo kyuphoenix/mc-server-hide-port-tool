@@ -33,4 +33,22 @@ describe('frontend static hardening', () => {
     expect(markup).not.toContain('row.from')
     expect(markup).not.toContain('row.key')
   })
+
+  it('maps signup-disabled OAuth callbacks to an explicit registration prompt', async () => {
+    const modulePath = '../public/static/app-core.js'
+    const { oauthLoginErrorMessage } = await import(modulePath) as {
+      oauthLoginErrorMessage(search: string): string
+    }
+
+    expect(oauthLoginErrorMessage(
+      '?error=OAuth%20%E7%99%BB%E5%BD%95%E5%A4%B1%E8%B4%A5&error=signup_disabled'
+    )).toBe('未注册，请先注册账号')
+    expect(oauthLoginErrorMessage(
+      '?oauth_error=1&error=signup_disabled'
+    )).toBe('未注册，请先注册账号')
+    expect(oauthLoginErrorMessage(
+      '?oauth_error=1&error=oauth_code_verification_failed'
+    )).toBe('OAuth 登录失败')
+    expect(oauthLoginErrorMessage('?error=普通错误')).toBe('普通错误')
+  })
 })

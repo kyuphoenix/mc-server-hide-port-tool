@@ -25,6 +25,7 @@ import {
   AUTH_ORIGIN,
   cookiesFromHeaders,
   FIXTURE_PROVIDER_ID,
+  mockOAuthProviderFetch,
   sameOriginJsonHeaders,
   seedFixtureOAuthProvider,
   setRegistrationPolicy
@@ -211,6 +212,31 @@ describe('OAuth registration routes', { timeout: 15_000 }, () => {
     expect(body).toMatchObject({ success: true })
     expect(new URL(String(body.redirect)).origin).toBe('https://provider.example')
     expect(await intentRows(db)).toHaveLength(0)
+  })
+
+  it('redirects an unregistered OAuth login with a distinguishable signup-disabled error', async () => {
+    const { env } = await setup()
+    mockOAuthProviderFetch()
+
+    const started = await postJson(env, '/api/auth/oauth/login', {
+      provider_id: FIXTURE_PROVIDER_ID
+    })
+    const startBody = await jsonBody(started)
+    const authorization = new URL(String(startBody.redirect))
+    const state = authorization.searchParams.get('state') ?? ''
+    const cookie = cookiesFromHeaders(started.headers)
+
+    const callbackResponse = await request(
+      env,
+      `/api/auth/oauth2/callback/${FIXTURE_PROVIDER_ID}?code=test-code&state=${encodeURIComponent(state)}`,
+      { headers: { cookie }, redirect: 'manual' }
+    )
+    const location = new URL(callbackResponse.headers.get('location') ?? '', AUTH_ORIGIN)
+
+    expect(callbackResponse.status).toBe(302)
+    expect(location.pathname).toBe('/login')
+    expect(location.searchParams.get('oauth_error')).toBe('1')
+    expect(location.searchParams.getAll('error')).toEqual(['signup_disabled'])
   })
 
   it.each([

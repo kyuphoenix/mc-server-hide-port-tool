@@ -3,14 +3,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import { DEFAULT_SETTINGS, isEmailAllowed } from '../src/services/settings'
 
-const runtimeExtensions = new Set(['.ts', '.tsx', '.js', '.css'])
+const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.css'])
+const documentationExtensions = new Set(['.md'])
 
-function collectRuntimeFiles(directory: string): string[] {
+function collectTextFiles(directory: string, extensions: ReadonlySet<string>): string[] {
   const files: string[] = []
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name)
-    if (entry.isDirectory()) files.push(...collectRuntimeFiles(path))
-    else if (runtimeExtensions.has(extname(entry.name))) files.push(path)
+    if (entry.isDirectory()) files.push(...collectTextFiles(path, extensions))
+    else if (extensions.has(extname(entry.name))) files.push(path)
   }
   return files
 }
@@ -18,10 +19,9 @@ function collectRuntimeFiles(directory: string): string[] {
 describe('source text encoding', () => {
   it('keeps production source and hardening documents free of known corruption markers', () => {
     const files = [
-      ...collectRuntimeFiles(join(process.cwd(), 'src')),
-      ...collectRuntimeFiles(join(process.cwd(), 'public')),
-      join(process.cwd(), 'docs/superpowers/plans/2026-07-16-production-hardening-plan.md'),
-      join(process.cwd(), 'docs/superpowers/specs/2026-07-16-production-hardening-design.md')
+      ...collectTextFiles(join(process.cwd(), 'src'), sourceExtensions),
+      ...collectTextFiles(join(process.cwd(), 'public'), sourceExtensions),
+      ...collectTextFiles(join(process.cwd(), 'docs'), documentationExtensions)
     ]
 
     for (const file of files) {

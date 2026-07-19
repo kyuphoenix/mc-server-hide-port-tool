@@ -459,7 +459,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>) {
         body: {
           providerId,
           callbackURL: next,
-          errorCallbackURL: '/login?error=' + encodeURIComponent("OAuth 登录失败")
+          errorCallbackURL: '/login?oauth_error=1'
         },
         headers: c.req.raw.headers,
         asResponse: true

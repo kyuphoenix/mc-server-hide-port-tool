@@ -5,6 +5,7 @@ import {
   escapeAttr,
   escapeHtml,
   mount,
+  oauthLoginErrorMessage,
   qs,
   showAppError
 } from './app-core.js';
@@ -293,7 +294,7 @@ async function boot() {
     const { res, data } = await apiGet(`/api/pages/login?next=${encodeURIComponent(next)}`);
     if (data?.redirect) { window.location.href = data.redirect; return; }
     if (!res.ok || !data?.success) { showAppError(apiMessage(data, "登录页加载失败")); return; }
-    const payload = { ...data.data, error: qs('error') || data.data.error, info: qs('registered') ? "注册成功，请登录" : data.data.info };
+    const payload = { ...data.data, error: oauthLoginErrorMessage(window.location.search) || data.data.error, info: qs('registered') ? "注册成功，请登录" : data.data.info };
     mount(renderLogin(payload));
     await bindAuthForms('login', payload);
     return;
