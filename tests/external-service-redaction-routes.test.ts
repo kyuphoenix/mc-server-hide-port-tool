@@ -232,6 +232,61 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     }
   })
 
+  it('rejects a DNS name already occupied in Cloudflare when no local record exists', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    const createMethods: string[] = []
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      const method = String(init?.method ?? 'GET').toUpperCase()
+
+      if (url.includes('/zones?')) {
+        return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+      }
+      if (url.includes('/dns_records?')) {
+        const name = new URL(url).searchParams.get('name.exact')
+        return Response.json({
+          success: true,
+          result: name === 'play.example.test'
+            ? [{
+                id: 'existing-remote-record',
+                name: 'play.example.test',
+                type: 'A',
+                content: '198.51.100.99'
+              }]
+            : []
+        })
+      }
+
+      createMethods.push(method)
+      return new Response('not found', { status: 404 })
+    })
+
+    const response = await postJson(env, '/api/create-dns', {
+      subdomain: 'play',
+      rootDomain: 'example.test',
+      serverAddress: '198.51.100.10',
+      port: 25565
+    }, headers)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body).toMatchObject({
+      success: false,
+      code: 'record_occupied',
+      message: '域名 play.example.test 已被占用，请换一个子域名'
+    })
+    expect(createMethods).toEqual([])
+    expect(await db.prepare(
+      "SELECT COUNT(*) AS count FROM dns_record WHERE host_name = 'play.example.test'"
+    ).first()).toEqual({ count: 0 })
+  })
+
   it('persists and resumes a partially-created DNS record', async () => {
     const { db, env } = await setup()
     const headers = await adminHeaders(db, env)
