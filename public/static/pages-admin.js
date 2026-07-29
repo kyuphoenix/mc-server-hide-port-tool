@@ -46,6 +46,7 @@ function renderSidebar(tab) {
       <div class="p-4 md:p-6 md:pt-0 flex-1">
         <nav class="space-y-1">
           <a href="/admin?tab=settings" data-tab-link="settings" class="${tabClass(tab, 'settings')}">全局设置</a>
+          <a href="/admin?tab=announcement" data-tab-link="announcement" class="${tabClass(tab, 'announcement')}">公告设置</a>
           <a href="/admin?tab=oauth" data-tab-link="oauth" class="${tabClass(tab, 'oauth')}">OAuth 应用</a>
           <a href="/admin?tab=invites" data-tab-link="invites" class="${tabClass(tab, 'invites')}">邀请码</a>
           <a href="/admin?tab=users" data-tab-link="users" class="${tabClass(tab, 'users')}">用户管理</a>
@@ -175,6 +176,70 @@ function renderSettingsTab(data) {
   </div>`;
 }
 
+
+function renderAnnouncementTab(data) {
+  const announcement = data.announcement || {
+    enabled: false,
+    title: '系统公告',
+    content: '',
+    version: 0,
+    updatedAt: null,
+    updatedBy: null
+  };
+  const updatedText = announcement.updatedAt ? formatDate(announcement.updatedAt) : '尚未发布';
+  const contentLength = String(announcement.content || '').length;
+  return `
+  <section class="relative overflow-hidden bg-slate-900/40 border border-slate-800 rounded-lg">
+    <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/80 to-transparent"></div>
+    <div class="p-6 sm:p-8">
+      <div id="announcement-alert">${alertBox('error', data.announcementError)}${alertBox('info', data.announcementInfo)}</div>
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-7 pb-5 border-b border-slate-800">
+        <div>
+          <div class="flex items-center gap-3 mb-2">
+            <span class="inline-flex rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-300">站点广播</span>
+            <span class="font-mono-custom text-xs text-slate-500">VERSION ${escapeHtml(String(announcement.version || 0))}</span>
+          </div>
+          <h3 class="text-xl font-bold text-white">公告设置</h3>
+          <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">登录、注册成功及已登录用户进入网页时会看到当前启用的公告。</p>
+        </div>
+        <div class="shrink-0 rounded-lg border border-slate-800 bg-slate-950/70 px-4 py-3 text-right">
+          <div class="text-[10px] uppercase tracking-wider text-slate-500">最后更新</div>
+          <div class="mt-1 text-xs font-mono-custom text-slate-300">${escapeHtml(updatedText)}</div>
+          ${announcement.updatedBy ? `<div class="mt-1 text-[11px] text-slate-600">管理员 ${escapeHtml(announcement.updatedBy)}</div>` : ''}
+        </div>
+      </div>
+
+      <form id="admin-announcement-form" class="space-y-6">
+        <label class="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+          <input type="checkbox" name="announcement_enabled" ${announcement.enabled ? 'checked' : ''} class="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-emerald-600" />
+          <span>
+            <span class="block text-sm font-semibold text-slate-100">启用公告</span>
+            <span class="mt-1 block text-xs leading-5 text-slate-500">关闭后保留标题与正文，但用户端不再显示。</span>
+          </span>
+        </label>
+
+        <div>
+          <label for="announcement-title" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">公告标题</label>
+          <input id="announcement-title" type="text" name="announcement_title" maxlength="80" value="${escapeAttr(announcement.title || '')}" placeholder="例如：服务维护通知" class="w-full rounded-lg border border-slate-800 bg-slate-950 px-4 py-3 text-white placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none" />
+        </div>
+
+        <div>
+          <div class="mb-2 flex items-center justify-between gap-3">
+            <label for="announcement-content" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">公告内容</label>
+            <span id="announcement-content-count" class="font-mono-custom text-[11px] text-slate-500">${contentLength} / 5000</span>
+          </div>
+          <textarea id="announcement-content" name="announcement_content" maxlength="5000" rows="12" placeholder="支持 Markdown 和安全 HTML，例如：**重要**、[查看详情](https://example.com) 或 <strong>重点</strong>。" class="w-full resize-y rounded-lg border border-slate-800 bg-slate-950 px-4 py-3 text-sm leading-7 text-white placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none">${escapeHtml(announcement.content || '')}</textarea>
+          <p class="mt-2 text-xs leading-5 text-slate-500">支持 Markdown（标题、列表、链接、代码块等）和常用 HTML 标签。危险脚本、事件属性、内联样式及不安全链接会自动移除。</p>
+        </div>
+
+        <div class="flex flex-col gap-4 rounded-xl border border-amber-500/15 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <p class="text-xs leading-5 text-amber-200/70"><strong class="font-semibold text-amber-200">版本规则：</strong>每次保存都会发布一个新版本，选择过“再也不见”的用户会在新版本发布后再次看到公告。</p>
+          <button type="submit" class="shrink-0 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/30 transition hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/60">保存并发布</button>
+        </div>
+      </form>
+    </div>
+  </section>`;
+}
 function renderOAuthTab(data) {
   const providers = data.oauthProviders || [];
   const templates = data.oauthTemplates || [];
@@ -487,6 +552,7 @@ function renderAll() {
   const tab = state.activeTab || 'settings';
   let body = '';
   if (tab === 'settings') body = renderSettingsTab(state);
+  else if (tab === 'announcement') body = renderAnnouncementTab(state);
   else if (tab === 'oauth') body = renderOAuthTab(state);
   else if (tab === 'invites') body = renderInvitesTab(state);
   else if (tab === 'users') body = renderUsersTab(state);
@@ -635,6 +701,32 @@ function bindEvents() {
   bindSidebar();
   ensureAdminMailScript();
   bindMailHelpers();
+
+  const announcementContent = document.getElementById('announcement-content');
+  const announcementCount = document.getElementById('announcement-content-count');
+  const updateAnnouncementCount = () => {
+    if (announcementContent && announcementCount) {
+      announcementCount.textContent = `${announcementContent.value.length} / 5000`;
+    }
+  };
+  announcementContent?.addEventListener('input', updateAnnouncementCount);
+  updateAnnouncementCount();
+
+  document.getElementById('admin-announcement-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const obj = formToObject(e.currentTarget);
+    const { data } = await apiPost('/api/admin/announcement', {
+      enabled: !!obj.announcement_enabled,
+      title: String(obj.announcement_title || ''),
+      content: String(obj.announcement_content || '')
+    });
+    if (data?.success) {
+      showToast(data.message || '公告已保存并发布新版本', 'success');
+      await loadAdmin('announcement', { announcementInfo: data.message || '公告已保存并发布新版本' });
+    } else {
+      await loadAdmin('announcement', { announcementError: apiMessage(data, '公告保存失败') });
+    }
+  });
 
   document.getElementById('admin-settings-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -835,4 +927,3 @@ async function boot() {
 }
 
 boot().catch((err) => showAppError(err instanceof Error ? err.message : '管理后台加载失败'));
-

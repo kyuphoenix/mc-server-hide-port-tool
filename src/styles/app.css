@@ -23,3 +23,163 @@ select option {
   background-color: #0f172a;
   color: #f8fafc;
 }
+
+.announcement-content > :first-child {
+  margin-top: 0;
+}
+
+.announcement-content > :last-child {
+  margin-bottom: 0;
+}
+
+.announcement-content p,
+.announcement-content ul,
+.announcement-content ol,
+.announcement-content blockquote,
+.announcement-content pre,
+.announcement-content table,
+.announcement-content details,
+.announcement-content img,
+.announcement-content hr {
+  margin-top: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+
+.announcement-content h1,
+.announcement-content h2,
+.announcement-content h3,
+.announcement-content h4,
+.announcement-content h5,
+.announcement-content h6 {
+  margin-top: 1.4rem;
+  margin-bottom: 0.65rem;
+  color: #f8fafc;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.announcement-content h1 { font-size: 1.55rem; }
+.announcement-content h2 { font-size: 1.35rem; }
+.announcement-content h3 { font-size: 1.18rem; }
+.announcement-content h4,
+.announcement-content h5,
+.announcement-content h6 { font-size: 1rem; }
+
+.announcement-content a {
+  color: #5eead4;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: rgb(45 212 191 / 0.45);
+  text-underline-offset: 0.2em;
+}
+
+.announcement-content a:hover {
+  color: #99f6e4;
+  text-decoration-color: currentColor;
+}
+
+.announcement-content strong,
+.announcement-content b {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.announcement-content ul,
+.announcement-content ol {
+  padding-left: 1.5rem;
+}
+
+.announcement-content ul { list-style-type: disc; }
+.announcement-content ol { list-style-type: decimal; }
+.announcement-content li { margin: 0.25rem 0; padding-left: 0.2rem; }
+.announcement-content li::marker { color: #34d399; }
+
+.announcement-content blockquote {
+  border-left: 3px solid rgb(52 211 153 / 0.65);
+  background: rgb(15 23 42 / 0.7);
+  padding: 0.75rem 1rem;
+  color: #cbd5e1;
+}
+
+.announcement-content code,
+.announcement-content kbd {
+  border: 1px solid #334155;
+  border-radius: 0.35rem;
+  background: #020617;
+  padding: 0.12rem 0.35rem;
+  color: #a7f3d0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.88em;
+}
+
+.announcement-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #334155;
+  border-radius: 0.65rem;
+  background: #020617;
+  padding: 1rem;
+  line-height: 1.65;
+}
+
+.announcement-content pre code {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: #d1fae5;
+  font-size: 0.875rem;
+}
+
+.announcement-content hr {
+  border: 0;
+  border-top: 1px solid #334155;
+}
+
+.announcement-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+}
+
+.announcement-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.announcement-content th,
+.announcement-content td {
+  border: 1px solid #334155;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+}
+
+.announcement-content th {
+  background: #0f172a;
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.announcement-content details {
+  border: 1px solid #334155;
+  border-radius: 0.65rem;
+  background: rgb(15 23 42 / 0.65);
+  padding: 0.75rem 1rem;
+}
+
+.announcement-content summary {
+  cursor: pointer;
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.announcement-content mark {
+  border-radius: 0.2rem;
+  background: rgb(245 158 11 / 0.28);
+  padding: 0.05rem 0.2rem;
+  color: #fef3c7;
+}
