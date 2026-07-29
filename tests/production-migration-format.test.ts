@@ -48,6 +48,19 @@ describe('production migration execution', () => {
     )
   })
 
+  it('deploys Worker configuration under the original action environment names', async () => {
+    const workflow = await readFile('.github/workflows/deploy.yml', 'utf8')
+
+    expect(workflow).toContain(
+      'CLOUDFLARE_DOMAINS_API_TOKEN: ${{ secrets.CLOUDFLARE_DOMAINS_API_TOKEN }}'
+    )
+    expect(workflow).toContain('echo "CLOUDFLARE_DOMAINS_API_TOKEN"')
+    expect(workflow).not.toContain('scripts/parse_domain_tokens.py')
+    expect(workflow).not.toContain('steps.lists.outputs.domains')
+    expect(workflow).not.toMatch(/^\s+DOMAINS:/m)
+    expect(workflow).not.toContain('echo "DOMAINS"')
+  })
+
   it('only injects the optional OAuth host allowlist when configured', async () => {
     const workflow = await readFile('.github/workflows/deploy.yml', 'utf8')
 

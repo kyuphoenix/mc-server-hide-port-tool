@@ -46,8 +46,8 @@
 
 | 变量 | 本地部署 | GitHub Actions 部署 |
 |---|---|---|
-| `<域名点换下划线>_CLOUDFLARE_API_TOKEN` | `.dev.vars` 或 `wrangler secret put` | 汇总到仓库 secret `CLOUDFLARE_DOMAINS_API_TOKEN`，CI 解析后注入 |
-| `DOMAINS` | `.dev.vars` / `wrangler.jsonc` vars | 通常由 CI 从 `CLOUDFLARE_DOMAINS_API_TOKEN` 派生 |
+| `<域名点换下划线>_CLOUDFLARE_API_TOKEN` | `.dev.vars` 或 `wrangler secret put` | 汇总到仓库 secret `CLOUDFLARE_DOMAINS_API_TOKEN`，以原名称和值部署后由程序解析 |
+| `DOMAINS` | `.dev.vars` / `wrangler.jsonc` vars | 无需配置；程序从 `CLOUDFLARE_DOMAINS_API_TOKEN` 读取，显式设置仍兼容 |
 | `BETTER_AUTH_SECRET` | `wrangler secret put` 或 `.dev.vars` | 仓库 secret |
 | `DATA_ENCRYPTION_KEY` | `wrangler secret put` 或 `.dev.vars` | 仓库 secret；必须独立于认证密钥 |
 | `DATA_ENCRYPTION_KEY_PREVIOUS` | 仅密钥轮换窗口配置 | 可选仓库 secret |

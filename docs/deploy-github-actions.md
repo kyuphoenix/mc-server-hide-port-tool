@@ -8,14 +8,14 @@
 2. 安装锁文件指定的依赖
 3. 创建或对齐 D1，写回 `database_id`，并准备 `BETTER_AUTH_URL` 对应的 custom domain
 4. 在部署新 Worker 前应用全部远端 D1 迁移，再逐条幂等安装 D1 触发器
-5. 解析 `CLOUDFLARE_DOMAINS_API_TOKEN`，生成 `DOMAINS` 与各域名 DNS token
+5. 按 GitHub Actions 中的原名称和值准备 Worker vars 与 secrets，不转换业务变量名
 6. 部署 Worker，并一次性注入 vars 与 secrets
 
 部署 workflow 不运行构建、测试、类型检查、迁移兼容检查或 Wrangler dry-run；这些检查应在代码合并或手动触发部署前完成。部署阶段只做必要输入检查、Cloudflare Token 有效性检查、数据库准备和实际发布。
 
 ## 为什么用 `CLOUDFLARE_DOMAINS_API_TOKEN`
 
-GitHub Actions 中 secret 名必须仅含 `[A-Z0-9_]` 且不能以数字开头，因此**根域名 Token 不再用 `*_CLOUDFLARE_API_TOKEN` 形式直接作为 GitHub secret 名**，而是统一汇总到 `CLOUDFLARE_DOMAINS_API_TOKEN`，由 CI 解析后再以 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`（小写）注入到 Worker（与运行时代码读取的命名一致）。
+GitHub Actions 中 secret 名必须仅含 `[A-Z0-9_]` 且不能以数字开头，因此根域名 Token 统一汇总到 `CLOUDFLARE_DOMAINS_API_TOKEN`。Workflow 不再翻译该名称或改写其值，而是以同名 Worker secret 直接部署；运行时由主程序解析域名和对应 Token。
 
 ## 需要配置的仓库 Secrets
 
@@ -23,7 +23,7 @@ GitHub Actions 中 secret 名必须仅含 `[A-Z0-9_]` 且不能以数字开头�
 |---|---|---|---|---|
 | `CLOUDFLARE_API_TOKEN` | 是 | 是 | （部署用） | 需 Workers + D1编辑 和 worker路由编辑 权限 |
 | `CLOUDFLARE_ACCOUNT_ID` | 否 | 是 | （部署用） | Cloudflare Account ID |
-| `CLOUDFLARE_DOMAINS_API_TOKEN` | 是 | 是 | 各 `<domain>_CLOUDFLARE_API_TOKEN` + 派生 `DOMAINS` | 见下方格式 |
+| `CLOUDFLARE_DOMAINS_API_TOKEN` | 是 | 是 | secret `CLOUDFLARE_DOMAINS_API_TOKEN` | 名称和值原样部署，见下方格式 |
 | `BETTER_AUTH_SECRET` | 是 | 是 | secret `BETTER_AUTH_SECRET` | 建议 `openssl rand -base64 32` 生成 |
 | `DATA_ENCRYPTION_KEY` | 是 | 是 | secret `DATA_ENCRYPTION_KEY` | 独立生成至少 32 字符，不得等于认证密钥 |
 | `DATA_ENCRYPTION_KEY_PREVIOUS` | 是 | 否 | secret `DATA_ENCRYPTION_KEY_PREVIOUS` | 仅轮换窗口配置，不得等于当前数据密钥 |
@@ -57,23 +57,23 @@ GitHub Actions 中 secret 名必须仅含 `[A-Z0-9_]` 且不能以数字开头�
 example1.com:abc123_your_token_here,example2.com:def456_your_token_here
 ```
 
-### CI 解析后的行为
+### 部署与运行时行为
 
-1. **token 注入**：每个域名前的 `:` 切分为「域名 / token」，CI 把每个 token 以 `<域名中的点→下划线>_CLOUDFLARE_API_TOKEN`（小写）的 secret 名循环 `wrangler secret put` 注入 Worker。例：`303302.xyz` → Worker secret `303302_xyz_CLOUDFLARE_API_TOKEN`。
-2. **DOMAINS 派生**：CI 把解析出的域名清单覆盖到 Worker 的 `DOMAINS` 普通环境变量（`["303302.xyz","example.com"]` 形式），无需单独设置 `DOMAINS` secret。
+1. **原名部署**：Workflow 将 GitHub Secret `CLOUDFLARE_DOMAINS_API_TOKEN` 以相同名称和值部署为 Worker secret，不生成额外变量。
+2. **运行时解析**：主程序从该 secret 的 `<域名>:<Token>` 对中同时取得可用域名清单和对应 DNS Token。
 
-最终运行时的 `DOMAINS` 中每个根域名都必须有对应 token，否则该域名创建 DNS 记录时会因找不到 token 而失败。
+本地或手动部署仍可继续使用 `DOMAINS` 与每域 `<domain>_CLOUDFLARE_API_TOKEN`；显式 `DOMAINS` 保持优先，以兼容原有配置。
 
 ## 新增根域名
 
-把对应的 `<域名>:<Token>` 拼接到 `CLOUDFLARE_DOMAINS_API_TOKEN` 末尾（英文 `,` 分隔）即可。CI 自动把新域名加入 Worker 的 `DOMAINS` 变量并注入对应 Token，无需改 workflow 或新增单独 secret。
+把对应的 `<域名>:<Token>` 拼接到 `CLOUDFLARE_DOMAINS_API_TOKEN` 末尾（英文 `,` 分隔）即可。Workflow 会原样更新同名 Worker secret，主程序在运行时自动识别新域名，无需改 workflow 或新增单独 secret。
 
 ## 域名清单的单一事实来源
 
 | 来源 | 是否生效 | 备注 |
 |---|---|---|
-| GitHub Secret `CLOUDFLARE_DOMAINS_API_TOKEN` | 是 | CI 部署时唯一维护入口，派生域名列表和每域 token |
-| `wrangler.jsonc.vars.DOMAINS` | CI 中会被覆盖 | 仅手动部署或本地开发时维护 |
+| GitHub Secret `CLOUDFLARE_DOMAINS_API_TOKEN` | 是 | CI 部署时唯一维护入口，原名原值注入后由程序解析 |
+| `wrangler.jsonc.vars.DOMAINS` | 兼容 | 仅手动部署或本地开发时使用；显式配置时优先 |
 | 单独的 GitHub `<domain>_CLOUDFLARE_API_TOKEN` | 否 | workflow 不读取，避免受 GitHub secret 命名限制影响 |
 
 ## 迁移与发布顺序

@@ -88,17 +88,12 @@ jobs:
       - name: Build deployment var and secret lists
         id: lists
         env:
-          CLOUDFLARE_DOMAINS_API_TOKEN: ${{ secrets.CLOUDFLARE_DOMAINS_API_TOKEN }}
           DATA_ENCRYPTION_KEY_PREVIOUS: ${{ secrets.DATA_ENCRYPTION_KEY_PREVIOUS }}
           OAUTH_ALLOWED_HOSTS: ${{ vars.OAUTH_ALLOWED_HOSTS }}
         run: |
           set -euo pipefail
-          out="$(python scripts/parse_domain_tokens.py "$CLOUDFLARE_DOMAINS_API_TOKEN")"
-          domains_json="$(printf '%s' "$out" | sed -n '3p')"
-          echo "domains=$domains_json" >> "$GITHUB_OUTPUT"
           {
             echo "vars<<LIST_EOF"
-            echo "DOMAINS"
             echo "BETTER_AUTH_URL"
             if [ -n "${OAUTH_ALLOWED_HOSTS:-}" ]; then
               echo "OAUTH_ALLOWED_HOSTS"
@@ -121,7 +116,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DOMAINS: ${{ steps.lists.outputs.domains }}
           BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
           DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}

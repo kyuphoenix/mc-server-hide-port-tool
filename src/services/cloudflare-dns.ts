@@ -212,27 +212,30 @@ export function getAllowedDomains(env: Bindings): string[] {
     return uniqueDomains(raw)
   }
 
-  if (!raw || !raw.trim()) {
-    return []
-  }
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return []
+    const trimmed = raw.trim()
 
-  const trimmed = raw.trim()
+    try {
+      const parsed = JSON.parse(trimmed)
 
-  try {
-    const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        return uniqueDomains(parsed)
+      }
 
-    if (Array.isArray(parsed)) {
-      return uniqueDomains(parsed)
+      if (typeof parsed === 'string') {
+        return uniqueDomains([parsed])
+      }
+    } catch {
+      // Fall through to comma-separated parsing.
     }
 
-    if (typeof parsed === 'string') {
-      return uniqueDomains([parsed])
-    }
-  } catch {
-    // Fall through to comma-separated parsing.
+    return uniqueDomains(trimmed.split(','))
   }
 
-  return uniqueDomains(trimmed.split(','))
+  return uniqueDomains([
+    ...parseAggregateCloudflareTokens(env.CLOUDFLARE_DOMAINS_API_TOKEN).keys()
+  ])
 }
 
 function uniqueDomains(values: unknown[]): string[] {

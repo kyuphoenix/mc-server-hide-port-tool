@@ -1,6 +1,6 @@
 # 本地开发用：每个根域名 token 单独一行，键名 <域名点换下划线>_CLOUDFLARE_API_TOKEN。
-# CI 部署时不要逐个建 GitHub secret，改为统一存到 CLOUDFLARE_DOMAINS_API_TOKEN，
-# 格式：<域名1>:<token1>,<域名2>:<token2>   （见 README / docs/deploy-github-actions.md）
+# CI 部署时统一存到同名 CLOUDFLARE_DOMAINS_API_TOKEN，并以原名称和值部署到 Worker；
+# 主程序运行时解析格式：<域名1>:<token1>,<域名2>:<token2>（见部署文档）。
 example1_com_CLOUDFLARE_API_TOKEN=your_example1_com_api_token_here
 example2_com_CLOUDFLARE_API_TOKEN=your_example2_com_api_token_here
 303302_xyz_CLOUDFLARE_API_TOKEN=your_303302_xyz_api_token_here
