@@ -13,8 +13,9 @@ import { listLinkedAccounts, type PasskeyRow } from '../services/user-settings'
 import { createAuth } from '../auth'
 import type { Bindings } from '../services/cloudflare-dns'
 import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
+import { getAnnouncement } from '../services/announcement'
 
-type AdminTab = 'settings' | 'oauth' | 'invites' | 'users' | 'dns'
+type AdminTab = 'settings' | 'announcement' | 'oauth' | 'invites' | 'users' | 'dns'
 
 async function firstSetupIsCompleted(db: D1Database): Promise<boolean> {
   return (await reconcileFirstSetup(db)).status === 'completed'
@@ -22,7 +23,7 @@ async function firstSetupIsCompleted(db: D1Database): Promise<boolean> {
 
 function parseAdminTab(raw: string | undefined | null): AdminTab {
   const v = String(raw ?? '').trim().toLowerCase()
-  if (v === 'oauth' || v === 'invites' || v === 'users' || v === 'dns' || v === 'settings') return v
+  if (v === 'announcement' || v === 'oauth' || v === 'invites' || v === 'users' || v === 'dns' || v === 'settings') return v
   return 'settings'
 }
 
@@ -236,12 +237,13 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
 
     const userPage = parsePositivePage(c.req.query('user_page'))
     const dnsPage = parsePositivePage(c.req.query('dns_page'))
-    const [usersResult, recordsResult, settings, inviteCodes, oauthProviders] = await Promise.all([
+    const [usersResult, recordsResult, settings, inviteCodes, oauthProviders, announcement] = await Promise.all([
       searchUsersPage(c.env.DB, { q, role, page: userPage, pageSize: 50 }),
       listAllRecordsPage(c.env.DB, { page: dnsPage, pageSize: 50 }),
       getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env)),
       listInviteCodes(c.env.DB),
-      listOAuthProvidersForAdmin(c.env.DB)
+      listOAuthProvidersForAdmin(c.env.DB),
+      getAnnouncement(c.env.DB)
     ])
     return apiOk(c, {
       activeTab,
@@ -261,6 +263,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
         totalPages: recordsResult.totalPages
       },
       settings: maskSettingsForAdmin(settings),
+      announcement,
       inviteCodes,
       oauthProviders,
       oauthTemplates: OAUTH_TEMPLATES,

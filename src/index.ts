@@ -5,6 +5,7 @@ import { registerDnsRoutes } from './routes/dns'
 import { registerAdminRoutes } from './routes/admin'
 import { registerSettingsRoutes } from './routes/settings'
 import { registerPageRoutes } from './routes/pages'
+import { registerAnnouncementRoutes } from './routes/announcement'
 import { requestIsHttps } from './lib/security'
 import { mutationBodyLimit } from './lib/api'
 
@@ -45,6 +46,7 @@ app.use('*', mutationBodyLimit)
 registerAuthRoutes(app)
 registerSettingsRoutes(app)
 registerAdminRoutes(app)
+registerAnnouncementRoutes(app)
 registerDnsRoutes(app)
 registerPageRoutes(app)
 

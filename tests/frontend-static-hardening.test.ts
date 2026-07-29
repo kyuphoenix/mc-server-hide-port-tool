@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { renderPageShell } from '../src/lib/page-shell'
 
 describe('frontend static hardening', () => {
   it('self-hosts the WebAuthn browser module under the self-only CSP', async () => {
@@ -51,4 +52,16 @@ describe('frontend static hardening', () => {
     )).toBe('OAuth 登录失败')
     expect(oauthLoginErrorMessage('?error=普通错误')).toBe('普通错误')
   })
+
+  it('loads the announcement dialog through an external module under the self-only CSP', () => {
+    const html = renderPageShell({
+      title: '??',
+      page: 'home',
+      scripts: ['/static/pages-home.js']
+    })
+
+    expect(html).toContain('<script type="module" src="/static/announcement.js"></script>')
+    expect(html).not.toContain('<script>')
+  })
+
 })

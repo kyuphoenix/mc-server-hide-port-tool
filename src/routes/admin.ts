@@ -46,6 +46,10 @@ import {
   safeMailTestClientMessage
 } from '../lib/external-service-security'
 import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
+import {
+  AnnouncementValidationError,
+  updateAnnouncement
+} from '../services/announcement'
 
 function asBool(v: unknown): boolean {
   if (typeof v === 'boolean') return v
@@ -97,6 +101,29 @@ function buildResendAccounts(
 }
 
 export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
+  app.post('/api/admin/announcement', async (c) => {
+    const denied = await requireJsonMutation(c)
+    if (denied) return denied
+    const admin = await requireAdmin(c.env, c.req.raw.headers)
+    if (!admin) return apiErr(c, '无权限', 403)
+
+    const body = await readJsonBody(c)
+    try {
+      const announcement = await updateAnnouncement(c.env.DB, {
+        enabled: asBool(body.enabled),
+        title: String(body.title ?? ''),
+        content: String(body.content ?? ''),
+        updatedBy: admin.id
+      })
+      return apiOk(c, { announcement }, { message: '公告已保存并发布新版本' })
+    } catch (error) {
+      if (error instanceof AnnouncementValidationError) {
+        return apiErr(c, error.message, 400)
+      }
+      throw error
+    }
+  })
+
   app.post('/api/admin/settings', async (c) => {
     const denied = await requireJsonMutation(c)
     if (denied) return denied

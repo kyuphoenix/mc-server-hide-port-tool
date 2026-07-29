@@ -1,4 +1,4 @@
-﻿import type { Context } from 'hono'
+import type { Context } from 'hono'
 import { getRequestCsrf, withCsrfCookie } from './csrf'
 
 
@@ -34,6 +34,7 @@ function renderScripts(scripts: string[]): string {
 /** Thin HTML shell. Page body is rendered by public/static client modules. */
 export function renderPageShell(opts: PageShellOptions): string {
   const scripts = renderScripts(opts.scripts || [])
+  const announcementScript = '<script type="module" src="/static/announcement.js"></script>'
   const loading = opts.loadingText || '\u52a0\u8f7d\u4e2d...'
   return `<!DOCTYPE html>
 <html lang="zh-CN" class="h-full scroll-smooth">
@@ -48,6 +49,7 @@ export function renderPageShell(opts: PageShellOptions): string {
       <div class="min-h-screen flex items-center justify-center text-slate-400 text-sm">${escapeAttr(loading)}</div>
     </div>
     ${scripts}
+    ${announcementScript}
   </body>
 </html>`
 }
