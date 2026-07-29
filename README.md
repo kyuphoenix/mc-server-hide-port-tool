@@ -12,14 +12,15 @@
 - **邮箱验证码**：启用 Resend 后需邮箱验证码注册；验证码哈希存储，待注册密码使用独立 `DATA_ENCRYPTION_KEY` 密封保存，并保留认证旧密文兼容解密
 - **通用 OAuth 登录/注册**：后台添加任意 OAuth/OIDC 应用，内置 GitHub / Google / Microsoft / Discord / Linux.do / OIDC 模板；支持自定义图标 URL
 - **GitHub 账号天数限制**：当存在 `provider_id=github` 的应用时，可限制最短注册天数；未达标会进入专门提示页，不会创建本地账号
-- **多根域名支持**：每个根域名使用独立 Cloudflare API Token，命名为 `<域名点换下划线>_CLOUDFLARE_API_TOKEN`
+- **站点公告**：管理员可在后台发布或停用公告；用户登录、注册成功或已登录进入站点时自动弹出，支持 Markdown 与经过安全过滤的 HTML，并提供“今日不见”和“再也不见”
+- **多根域名支持**：使用 `CLOUDFLARE_DOMAINS_API_TOKEN=<域名>:<Token>,...` 汇总多个根域名；主程序运行时解析域名和 Token，同时兼容原有 `DOMAINS` 与每域 Token 配置
 - **记录数量与子域名限制**：全局 `max_records_per_user` / `min_subdomain_length`；可对单用户覆盖记录上限。超级管理员与管理员创建记录时无上限，也不受最小子域名长度限制
 - **可恢复 DNS 同步**：D1 保存 pending 变更、`sync_status` 与安全错误码；外部 DNS 失败后可重试，不通过删除本地行掩盖状态
 - **可恢复用户删除**：后台删除使用持久化作业与租约分批清理 DNS，Worker 中断后可继续处理
-- **D1 持久化**：用户、会话、DNS 归属、验证码、设置、邀请码、OAuth 应用均存 Cloudflare D1
+- **D1 持久化**：用户、会话、DNS 归属、验证码、设置、邀请码、OAuth 应用和站点公告均存 Cloudflare D1
 - **GitHub Actions 一键部署**：自动创建 D1、应用迁移、注入 secrets/vars 并部署 Worker
 
->本项目通过cloudflare api添加dns记录，因此不需要域名一定托管在部署worker的项目下，只需要域名托管在cloudflare，并且获取到具有修改dns权限的token，就能加入列表成功创建记录。
+> 本项目通过 Cloudflare API 添加 DNS 记录，因此业务根域名不必与 Worker 自定义域名相同；只要根域名已接入 Cloudflare DNS，并提供具有 DNS 编辑权限的 Token，即可加入可用域名列表。
 
 ## 技术栈
 
@@ -46,8 +47,9 @@
 
 | 变量 | 本地部署 | GitHub Actions 部署 |
 |---|---|---|
-| `<域名点换下划线>_CLOUDFLARE_API_TOKEN` | `.dev.vars` 或 `wrangler secret put` | 汇总到仓库 secret `CLOUDFLARE_DOMAINS_API_TOKEN`，以原名称和值部署后由程序解析 |
-| `DOMAINS` | `.dev.vars` / `wrangler.jsonc` vars | 无需配置；程序从 `CLOUDFLARE_DOMAINS_API_TOKEN` 读取，显式设置仍兼容 |
+| `CLOUDFLARE_DOMAINS_API_TOKEN` | `.dev.vars` 或 `wrangler secret put`；格式为 `<域名>:<Token>,...` | 必需仓库 secret；以同名同值直接部署到 Worker，由程序运行时解析 |
+| `<域名点换下划线>_CLOUDFLARE_API_TOKEN` | 本地或手动部署的向后兼容配置；存在时优先用于该域名 | Workflow 不读取单独的每域 secret，请汇总到 `CLOUDFLARE_DOMAINS_API_TOKEN` |
+| `DOMAINS` | 可选兼容配置；显式设置时域名清单优先 | 无需配置；未设置时程序从 `CLOUDFLARE_DOMAINS_API_TOKEN` 推导 |
 | `BETTER_AUTH_SECRET` | `wrangler secret put` 或 `.dev.vars` | 仓库 secret |
 | `DATA_ENCRYPTION_KEY` | `wrangler secret put` 或 `.dev.vars` | 仓库 secret；必须独立于认证密钥 |
 | `DATA_ENCRYPTION_KEY_PREVIOUS` | 仅密钥轮换窗口配置 | 可选仓库 secret |
@@ -66,6 +68,15 @@
 | 记录限制 | 全局每用户记录上限、最小子域名长度；可覆盖单用户上限 |
 | 用户管理 | 创建用户；仅超级管理员可升降管理员 |
 | OAuth 登录应用 | 添加/编辑/启停/删除第三方 OAuth；支持模板与图标 URL |
+| 站点公告 | 设置标题、正文和启用状态；每次保存生成新版本，支持 Markdown 与安全 HTML |
+
+### 公告显示规则
+
+- 公告启用且标题、正文有效时，用户登录后、注册成功后以及已登录用户进入首页、个人设置或管理后台时会检查并弹出。
+- 点击普通关闭按钮只关闭当前弹窗，下次进入符合条件的页面仍会显示。
+- **今日不见**：按浏览器本地日期记录，当天不再显示任何公告版本。
+- **再也不见**：记录当前公告版本；只有管理员再次保存、公告版本更新后才会重新弹出。
+- 公告正文支持 GitHub Flavored Markdown 和受限原始 HTML；服务端会移除脚本、事件处理器、内联样式及不安全链接。
 
 ### OAuth 配置要点
 
@@ -128,13 +139,18 @@ node scripts/install-d1-triggers.cjs --local
 - `0011_first_setup_claim.sql` — 首次管理员初始化单例状态机、原子认领与 credential 完成触发器
 - `0012_dns_sync_state.sql` — DNS pending 变更、同步状态、重试与安全错误码
 - `0013_user_deletion_jobs.sql` — 可恢复用户删除作业、进度与租约字段
+- `0014_site_announcement.sql` — 管理员维护的单例站点公告、启用状态与版本号
 
 4. 复制 `.dev.vars.example` 为 `.dev.vars` 并填写：
 
 ```txt
-example_com_CLOUDFLARE_API_TOKEN=...
-example_net_CLOUDFLARE_API_TOKEN=...
-DOMAINS=["example.com","example.net"]
+# 推荐：直接使用汇总变量；未设置 DOMAINS 时会自动推导域名清单
+CLOUDFLARE_DOMAINS_API_TOKEN=example.com:<token>,example.net:<token>
+
+# 向后兼容：也可以显式设置 DOMAINS 并为每个域名配置旧式独立 Token
+# example_com_CLOUDFLARE_API_TOKEN=...
+# example_net_CLOUDFLARE_API_TOKEN=...
+# DOMAINS=["example.com","example.net"]
 BETTER_AUTH_SECRET=<独立生成的至少 32 字符随机值>
 DATA_ENCRYPTION_KEY=<另一份独立生成的至少 32 字符随机值>
 # DATA_ENCRYPTION_KEY_PREVIOUS=<仅轮换窗口使用的旧数据密钥>
@@ -169,7 +185,7 @@ src/
   styles/app.css                       # Tailwind 输入样式
 public/static/                         # 构建后的 CSS 与浏览器脚本
 scripts/                               # D1/域名部署辅助、触发器安装与迁移兼容校验
-migrations/                            # 0000 至 0013 迁移；triggers/ 为独立幂等触发器
+migrations/                            # 0000 至 0014 迁移；triggers/ 为独立幂等触发器
 tests/                                 # Vitest 安全与业务回归测试
 .github/workflows/deploy.yml           # 固定版本 Actions 的生产部署流程
 docs/
@@ -184,6 +200,7 @@ docs/
 - 仅超级管理员可提升/降级管理员；普通管理员不能降级/删除管理员，也不能操作超级管理员
 - 邀请码仅在开启邀请注册后生效；生成权限限管理员与超级管理员
 - OAuth 应用保存在 D1 表 `oauth_provider`，运行时注入 better-auth `genericOAuth`
+- 站点公告保存在 D1 表 `site_announcement`；管理员或超级管理员均可发布，每次保存都会递增版本号
 - `dns_record.host_name` 与 `account(providerId, accountId)` 有唯一约束，避免重复绑定
 - 邮箱验证流程中的待注册密码不会明文落库（使用独立 `DATA_ENCRYPTION_KEY` 密封；`BETTER_AUTH_SECRET` 仅用于兼容解密历史密文）
 

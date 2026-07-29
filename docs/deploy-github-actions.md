@@ -29,7 +29,7 @@ GitHub Actions 中 secret 名必须仅含 `[A-Z0-9_]` 且不能以数字开头�
 | `DATA_ENCRYPTION_KEY_PREVIOUS` | 是 | 否 | secret `DATA_ENCRYPTION_KEY_PREVIOUS` | 仅轮换窗口配置，不得等于当前数据密钥 |
 | `BETTER_AUTH_URL` | 否 | 是 | var `BETTER_AUTH_URL` | 生产 HTTPS origin，不含路径、查询或 fragment |
 
-> workflow 会在安装依赖前校验所有必需 Secrets；缺值、密钥少于 32 字符、数据密钥与认证密钥相同或 `BETTER_AUTH_URL` 不是纯 HTTPS origin 时会立即失败。`DATA_ENCRYPTION_KEY_PREVIOUS` 为空时不会注入 Worker。
+> workflow 会在安装依赖前检查所有必需 Secrets 是否为空，并验证部署用 `CLOUDFLARE_API_TOKEN` 处于 active 状态。认证密钥、数据密钥和 `BETTER_AUTH_URL` 的强度与格式仍由主程序在运行时执行严格校验；`DATA_ENCRYPTION_KEY_PREVIOUS` 为空时不会注入 Worker。
 >
 > `APP_NAME` 已在 `wrangler.jsonc.vars` 中默认 `hide-port-tool`，无需在 CI 设置。
 
@@ -59,8 +59,9 @@ example1.com:abc123_your_token_here,example2.com:def456_your_token_here
 
 ### 部署与运行时行为
 
-1. **原名部署**：Workflow 将 GitHub Secret `CLOUDFLARE_DOMAINS_API_TOKEN` 以相同名称和值部署为 Worker secret，不生成额外变量。
-2. **运行时解析**：主程序从该 secret 的 `<域名>:<Token>` 对中同时取得可用域名清单和对应 DNS Token。
+1. **原名部署**：Workflow 将 GitHub Secret `CLOUDFLARE_DOMAINS_API_TOKEN` 以相同名称和值部署为 Worker secret，不生成 `DOMAINS`，也不生成每域 `<domain>_CLOUDFLARE_API_TOKEN`。
+2. **运行时解析**：主程序从该 secret 的 `<域名>:<Token>` 对中同时取得可用域名清单和对应 DNS Token。域名会转为小写并移除末尾的点；重复域名使用最先出现的有效 Token。
+3. **格式要求**：条目之间使用英文逗号分隔，域名与 Token 使用第一个英文冒号分隔；空条目或缺少域名/Token 的条目会被忽略。
 
 本地或手动部署仍可继续使用 `DOMAINS` 与每域 `<domain>_CLOUDFLARE_API_TOKEN`；显式 `DOMAINS` 保持优先，以兼容原有配置。
 
@@ -78,7 +79,7 @@ example1.com:abc123_your_token_here,example2.com:def456_your_token_here
 
 ## 迁移与发布顺序
 
-workflow 使用独立步骤先执行 D1 对齐和远端迁移，再运行 `scripts/install-d1-triggers.cjs --remote`，最后执行 `deploy --minify`。触发器必须作为单条 SQL 命令安装，以避开 Cloudflare 远端 D1 对迁移批次中多行 `CREATE TRIGGER` 的解析缺陷。任一迁移或触发器安装失败都会阻止 Worker 发布，因此 `0012`/`0013` 会在新 Worker 接收请求前生效。
+workflow 使用独立步骤先执行 D1 对齐和全部远端迁移，再运行 `scripts/install-d1-triggers.cjs --remote`，最后执行 `deploy --minify`。触发器必须作为单条 SQL 命令安装，以避开 Cloudflare 远端 D1 对迁移批次中多行 `CREATE TRIGGER` 的解析缺陷。任一迁移或触发器安装失败都会阻止 Worker 发布，因此包括 `0014_site_announcement.sql` 在内的全部迁移都会在新 Worker 接收请求前生效。
 
 生产发布前后的备份、监控、回滚与恢复步骤见 [`production-runbook.md`](production-runbook.md)。
 
@@ -97,8 +98,9 @@ workflow 使用独立步骤先执行 D1 对齐和远端迁移，再运行 `scrip
 
 CI 部署后 Worker 拥有：
 
-- 明文 var `DOMAINS = ["303302.xyz"]`、`BETTER_AUTH_URL = https://mc.303302.xyz`
-- secret `303302_xyz_CLOUDFLARE_API_TOKEN`、`BETTER_AUTH_SECRET`、`DATA_ENCRYPTION_KEY`
+- 明文 var `BETTER_AUTH_URL = https://mc.303302.xyz`
+- secret `CLOUDFLARE_DOMAINS_API_TOKEN`、`BETTER_AUTH_SECRET`、`DATA_ENCRYPTION_KEY`
+- 主程序运行时从 `CLOUDFLARE_DOMAINS_API_TOKEN` 推导可用根域名 `303302.xyz` 及其 DNS Token
 - custom domain `mc.303302.xyz` 绑定到该 Worker（DNS + 证书由 Cloudflare 自动管理）
 
 ## 示例：双域名 + 后台配置 OAuth
@@ -109,15 +111,16 @@ CI 部署后 Worker 拥有：
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | `<账户级部署 Token>` |
 | `CLOUDFLARE_ACCOUNT_ID` | `<Account ID>` |
-| `CLOUDFLARE_DOMAINS_API_TOKEN` | `example1.com:tok_A,example.com:tok_B` |
+| `CLOUDFLARE_DOMAINS_API_TOKEN` | `example1.com:tok_A,example2.com:tok_B` |
 | `BETTER_AUTH_URL` | `https://mc.example.com` |
 | `BETTER_AUTH_SECRET` | `<至少 32 字符随机串>` |
 | `DATA_ENCRYPTION_KEY` | `<另一份独立的至少 32 字符随机串>` |
 
 CI 部署后 Worker 拥有：
 
-- 明文 var `DOMAINS = ["example1.com","example2.com"]`、`BETTER_AUTH_URL`
-- secret `example1_com_CLOUDFLARE_API_TOKEN`、`example2_com_CLOUDFLARE_API_TOKEN`、`BETTER_AUTH_SECRET`、`DATA_ENCRYPTION_KEY`
+- 明文 var `BETTER_AUTH_URL`
+- secret `CLOUDFLARE_DOMAINS_API_TOKEN`、`BETTER_AUTH_SECRET`、`DATA_ENCRYPTION_KEY`
+- 主程序运行时推导 `example1.com`、`example2.com` 及各自对应的 DNS Token
 - custom domain `mc.example.com` 绑定到该 Worker
 
 ### 部署后配置 OAuth
@@ -133,6 +136,13 @@ https://mc.example.com/api/auth/oauth2/callback/<provider_id>
 
 5. （可选）在注册设置中开启邀请码、配置 GitHub 最短注册天数、选择 `email` / `oauth` / `both` 注册模式。
 
+### 部署后配置公告
+
+1. 使用管理员或超级管理员账号打开管理后台 → **站点公告**。
+2. 填写标题和正文并启用公告；正文支持 GitHub Flavored Markdown 和受限原始 HTML，服务端会移除脚本、事件处理器、内联样式及不安全 URL。
+3. 每次保存都会生成新的公告版本；此前选择“再也不见”的用户会在版本更新后再次看到公告。
+4. 公告会在用户登录后、注册成功后，以及已登录用户进入首页、个人设置或管理后台时检查并弹出。“今日不见”只在浏览器本地当天有效。
+
 ## 手动触发与发布后检查
 
 在 **Actions** 页面选择 *Deploy to Cloudflare Workers* → **Run workflow**。完成后至少检查：
@@ -142,3 +152,4 @@ https://mc.example.com/api/auth/oauth2/callback/<provider_id>
 3. 创建、更新、删除一条测试 DNS 记录，确认远端与 D1 一致。
 4. 检查 `sync_status = 'error'`、用户删除作业 `failed` 或长期 `running`，以及 Worker 5xx/结构化安全事件。
 5. 启用邮件或 OAuth 时执行对应冒烟测试。
+6. 在管理后台保存一版测试公告，验证登录/注册成功后的弹窗、Markdown/HTML 渲染，以及“今日不见”和“再也不见”的版本行为。
