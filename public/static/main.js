@@ -67,7 +67,12 @@ function initHomeDns() {
   if (tbody && !tbody.dataset.bound) {
     tbody.dataset.bound = '1';
     tbody.addEventListener('click', onRecordsClick);
+    tbody.addEventListener('mouseover', onRecordsInfoHover);
+    tbody.addEventListener('mouseout', onRecordsInfoLeave);
+    tbody.addEventListener('focusin', onRecordsInfoHover);
+    tbody.addEventListener('focusout', onRecordsInfoLeave);
   }
+  bindRecordInfoGlobal();
 
   const cancelEditBtn = getCancelEditBtn();
   if (cancelEditBtn && !cancelEditBtn.dataset.bound) {
@@ -371,7 +376,7 @@ function ensureEmptyState() {
       const tr = document.createElement('tr');
       tr.setAttribute('data-empty-row', '1');
       tr.innerHTML = `
-        <td colspan="9" class="py-12 text-center text-slate-500">
+        <td colspan="5" class="py-12 text-center text-slate-500">
           <div class="flex flex-col items-center justify-center gap-3">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
@@ -396,14 +401,23 @@ function createRecordRow(record) {
   const proxied = record.record_mode === 'dns' && ['A', 'AAAA', 'CNAME'].includes(type) ? (Number(record.proxied || 0) > 0 ? '小黄云' : 'DNS only') : '-';
   const remark = String(record.remark || '').trim();
   tr.innerHTML = `
+    <td class="py-4 pl-4 pr-1 w-10">
+      <button
+        type="button"
+        class="record-info-trigger flex items-center justify-center text-slate-500 hover:text-slate-300 transition cursor-pointer"
+        aria-label="查看记录详情"
+        data-info-mode="${escapeAttr(mode)}"
+        data-info-type="${escapeAttr(type)}"
+        data-info-proxied="${escapeAttr(proxied)}"
+        data-info-remark="${escapeAttr(remark)}"
+        data-info-created="${escapeAttr(formatDate(record.created_at))}"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      </button>
+    </td>
     <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="点击即可选择复制">${escapeHtml(record.host_name)}</td>
-    <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(mode)}</td>
-    <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(type)}</td>
     <td class="py-4 px-4 font-mono-custom text-slate-300 break-all">${escapeHtml(record.server_address)}</td>
-    <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(proxied)}</td>
     <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(port)}</td>
-    <td class="py-4 px-4 text-slate-300 break-all">${remark ? escapeHtml(remark) : '<span class="text-slate-600">-</span>'}</td>
-    <td class="py-4 px-4 text-slate-400 text-xs">${escapeHtml(formatDate(record.created_at))}</td>
     <td class="py-4 px-4 text-right">
       <div class="inline-flex items-center gap-2">
         <button
@@ -432,6 +446,83 @@ function createRecordRow(record) {
       </div>
     </td>`;
   return tr;
+}
+
+let recordInfoPanel = null;
+let recordInfoGlobalBound = false;
+
+function getRecordInfoPanel() {
+  if (recordInfoPanel && recordInfoPanel.isConnected) return recordInfoPanel;
+  const panel = document.createElement('div');
+  panel.id = 'record-info-popover';
+  panel.setAttribute('role', 'tooltip');
+  panel.className = 'fixed z-40 hidden w-64 rounded-xl border border-slate-700 bg-slate-950/95 backdrop-blur p-3.5 shadow-2xl shadow-black/50 text-xs';
+  document.body.appendChild(panel);
+  recordInfoPanel = panel;
+  return panel;
+}
+
+function buildRecordInfoHtml(trigger) {
+  const rows = [
+    ['模式', trigger.getAttribute('data-info-mode') || ''],
+    ['类型', trigger.getAttribute('data-info-type') || ''],
+    ['代理', trigger.getAttribute('data-info-proxied') || ''],
+    ['备注', trigger.getAttribute('data-info-remark') || ''],
+    ['创建时间', trigger.getAttribute('data-info-created') || '']
+  ];
+  return `<dl class="space-y-1.5">${rows.map(([label, value]) => `
+    <div class="flex gap-2">
+      <dt class="w-14 shrink-0 text-slate-500">${escapeHtml(label)}</dt>
+      <dd class="min-w-0 break-all text-slate-200">${value ? escapeHtml(value) : '<span class="text-slate-600">-</span>'}</dd>
+    </div>`).join('')}</dl>`;
+}
+
+function showRecordInfo(trigger) {
+  const panel = getRecordInfoPanel();
+  panel.innerHTML = buildRecordInfoHtml(trigger);
+  panel.classList.remove('hidden');
+  const rect = trigger.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  let left = rect.left - 4;
+  const maxLeft = window.innerWidth - panelRect.width - 8;
+  if (left > maxLeft) left = maxLeft;
+  if (left < 8) left = 8;
+  let top = rect.bottom + 8;
+  if (top + panelRect.height > window.innerHeight - 8) top = rect.top - panelRect.height - 8;
+  if (top < 8) top = 8;
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+
+function hideRecordInfo() {
+  if (recordInfoPanel) recordInfoPanel.classList.add('hidden');
+}
+
+function closestInfoTrigger(event) {
+  return event.target && event.target.closest ? event.target.closest('.record-info-trigger') : null;
+}
+
+function onRecordsInfoHover(event) {
+  const trigger = closestInfoTrigger(event);
+  if (trigger) showRecordInfo(trigger);
+}
+
+function onRecordsInfoLeave(event) {
+  const trigger = closestInfoTrigger(event);
+  if (!trigger) return;
+  const next = event.relatedTarget;
+  if (next && trigger.contains(next)) return;
+  hideRecordInfo();
+}
+
+function bindRecordInfoGlobal() {
+  if (recordInfoGlobalBound) return;
+  recordInfoGlobalBound = true;
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') hideRecordInfo();
+  });
+  window.addEventListener('scroll', hideRecordInfo, true);
+  window.addEventListener('resize', hideRecordInfo);
 }
 
 function escapeHtml(value) {

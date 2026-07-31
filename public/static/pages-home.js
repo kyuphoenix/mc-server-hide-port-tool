@@ -14,16 +14,25 @@ function renderRecordRow(r) {
   const port = r.record_mode === 'mc' || type === 'SRV' ? String(r.port || '') : '-';
   const proxied = r.record_mode === 'dns' && ['A', 'AAAA', 'CNAME'].includes(type) ? (Number(r.proxied || 0) > 0 ? '小黄云' : 'DNS only') : '-';
   const remark = String(r.remark || '').trim();
-  return `
+   return `
     <tr class="hover:bg-slate-900/40 transition" data-record-id="${escapeAttr(r.id)}">
+      <td class="py-4 pl-4 pr-1 w-10">
+        <button
+          type="button"
+          class="record-info-trigger flex items-center justify-center text-slate-500 hover:text-slate-300 transition cursor-pointer"
+          aria-label="查看记录详情"
+          data-info-mode="${escapeAttr(mode)}"
+          data-info-type="${escapeAttr(type)}"
+          data-info-proxied="${escapeAttr(proxied)}"
+          data-info-remark="${escapeAttr(remark)}"
+          data-info-created="${escapeAttr(formatDate(r.created_at))}"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        </button>
+      </td>
       <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="点击即可选择复制">${escapeHtml(r.host_name)}</td>
-      <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(mode)}</td>
-      <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(r.target_type || '')}</td>
       <td class="py-4 px-4 font-mono-custom text-slate-300 break-all">${escapeHtml(r.server_address)}</td>
-      <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(proxied)}</td>
       <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(port)}</td>
-      <td class="py-4 px-4 text-slate-300 break-all">${remark ? escapeHtml(remark) : '<span class="text-slate-600">-</span>'}</td>
-      <td class="py-4 px-4 text-slate-400 text-xs">${escapeHtml(formatDate(r.created_at))}</td>
       <td class="py-4 px-4 text-right">
         <div class="inline-flex items-center gap-2">
           <button type="button" data-edit-id="${escapeAttr(r.id)}" data-host-name="${escapeAttr(r.host_name)}" data-root-domain="${escapeAttr(r.root_domain)}" data-subdomain="${escapeAttr(r.subdomain)}" data-server-address="${escapeAttr(r.server_address)}" data-port="${escapeAttr(String(r.port || ''))}" data-mode="${escapeAttr(r.record_mode || 'mc')}" data-target-type="${escapeAttr(r.target_type || '')}" data-proxied="${Number(r.proxied || 0) > 0 ? '1' : '0'}" data-remark="${escapeAttr(remark)}" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition active:scale-[0.98]">修改</button>
@@ -41,7 +50,7 @@ function renderHome(data) {
   const isAdmin = user.role === 'admin';
   const rows = records.length
     ? records.map(renderRecordRow).join('')
-    : `<tr data-empty-row="1"><td colspan="9" class="py-12 text-center text-slate-500"><div class="flex flex-col items-center justify-center gap-3"><svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg><span>暂无记录，快去左侧创建一条吧！</span></div></td></tr>`;
+    : `<tr data-empty-row="1"><td colspan="5" class="py-12 text-center text-slate-500"><div class="flex flex-col items-center justify-center gap-3"><svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg><span>暂无记录，快去左侧创建一条吧！</span></div></td></tr>`;
 
   return `
   <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-12">
@@ -157,14 +166,10 @@ function renderHome(data) {
             <table class="w-full text-sm text-left border-collapse">
               <thead>
                 <tr class="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  <th class="py-4 pl-4 pr-1 w-10"><span class="sr-only">详情</span></th>
                   <th class="py-4 px-4">主机名</th>
-                  <th class="py-4 px-4">模式</th>
-                  <th class="py-4 px-4">类型</th>
                   <th class="py-4 px-4">记录内容</th>
-                  <th class="py-4 px-4">代理</th>
                   <th class="py-4 px-4">端口</th>
-                  <th class="py-4 px-4">备注</th>
-                  <th class="py-4 px-4">创建时间</th>
                   <th class="py-4 px-4 text-right">操作</th>
                 </tr>
               </thead>
