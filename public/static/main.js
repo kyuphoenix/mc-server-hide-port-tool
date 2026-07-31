@@ -159,8 +159,8 @@ function canProxy(mode = getRecordMode(), type = getRecordType()) {
 }
 
 function refreshModeFields() {
-  const mode = getRecordMode();
-  const type = getRecordType();
+  let mode = getRecordMode();
+  let type = getRecordType();
   const portGroup = getPortGroup();
   const recordTypeGroup = getRecordTypeGroup();
   const proxiedGroup = getProxiedGroup();
