@@ -89,11 +89,11 @@ function renderHome(data) {
                   </button>
                   <div id="record-mode-info-panel" role="tooltip" class="hidden group-hover:block absolute left-0 top-full z-30 w-72 pt-2">
                     <div class="rounded-xl border border-slate-700 bg-slate-950/95 backdrop-blur p-3.5 shadow-2xl shadow-black/50 space-y-2.5">
-                      <div>
+                      <div id="record-mode-info-dns">
                         <div class="text-xs font-semibold text-emerald-400">普通 DNS</div>
                         <p class="mt-1 text-xs leading-relaxed text-slate-300">创建 A / AAAA / CNAME / TXT / SRV 记录，其中 A、AAAA、CNAME 可开启 Cloudflare 代理（小黄云）。</p>
                       </div>
-                      <div class="border-t border-slate-800 pt-2.5">
+                      <div id="record-mode-info-mc" class="border-t border-slate-800 pt-2.5">
                         <div class="text-xs font-semibold text-emerald-400">MC 模式</div>
                         <p class="mt-1 text-xs leading-relaxed text-slate-300">创建目标记录的同时自动生成 _minecraft._tcp SRV 记录，Minecraft 客户端连接时无需输入端口。</p>
                       </div>

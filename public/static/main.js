@@ -53,6 +53,8 @@ function getRemarkInput() { return el('remark'); }
 function getEditingIdInput() { return el('editing-id'); }
 function getEditingBanner() { return el('editing-banner'); }
 function getFormTitle() { return el('form-title'); }
+function getRecordModeInfoDns() { return el('record-mode-info-dns'); }
+function getRecordModeInfoMc() { return el('record-mode-info-mc'); }
 
 function initHomeDns() {
   const button = getButton();
@@ -208,6 +210,7 @@ function refreshModeFields() {
     const dnsOption = modeSelect.querySelector('option[value="dns"]');
     if (dnsOption) {
       const dnsAvailable = domainMeta.dnsModeEnabled || editingIsDns;
+      dnsOption.hidden = !dnsAvailable;
       dnsOption.disabled = !dnsAvailable;
       dnsOption.textContent = domainMeta.dnsModeEnabled ? '普通 DNS' : '普通 DNS（已关闭）';
     }
@@ -249,6 +252,19 @@ function refreshModeFields() {
           : '例如 192.0.2.10 或 target.example.com';
   }
   if (button && !editingId) button.textContent = mode === 'mc' ? '创建 MC 记录' : '创建 DNS 记录';
+  refreshRecordModeInfo();
+}
+
+function refreshRecordModeInfo() {
+  const showDns = domainMeta.dnsModeEnabled;
+  const dnsSection = getRecordModeInfoDns();
+  const mcSection = getRecordModeInfoMc();
+  if (dnsSection) dnsSection.hidden = !showDns;
+  if (mcSection) {
+    mcSection.classList.toggle('border-t', showDns);
+    mcSection.classList.toggle('border-slate-800', showDns);
+    mcSection.classList.toggle('pt-2.5', showDns);
+  }
 }
 
 async function loadDomains() {
