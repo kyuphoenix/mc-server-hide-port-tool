@@ -81,7 +81,26 @@ function renderHome(data) {
             <input type="hidden" id="editing-id" value="" />
             <div id="editing-banner" class="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">正在修改已有记录：主机名不可更改，仅更新模式、目标和代理状态。</div>
             <div>
-              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">记录模式</label>
+              <div class="mb-2 flex items-center gap-1.5">
+                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider">记录模式</label>
+                <div class="relative group" id="record-mode-info">
+                  <button type="button" id="record-mode-info-toggle" aria-expanded="false" aria-label="查看记录模式说明" class="flex items-center justify-center text-slate-500 hover:text-slate-300 transition cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </button>
+                  <div id="record-mode-info-panel" role="tooltip" class="hidden group-hover:block absolute left-0 top-full z-30 w-72 pt-2">
+                    <div class="rounded-xl border border-slate-700 bg-slate-950/95 backdrop-blur p-3.5 shadow-2xl shadow-black/50 space-y-2.5">
+                      <div>
+                        <div class="text-xs font-semibold text-emerald-400">普通 DNS</div>
+                        <p class="mt-1 text-xs leading-relaxed text-slate-300">创建 A / AAAA / CNAME / TXT / SRV 记录，其中 A、AAAA、CNAME 可开启 Cloudflare 代理（小黄云）。</p>
+                      </div>
+                      <div class="border-t border-slate-800 pt-2.5">
+                        <div class="text-xs font-semibold text-emerald-400">MC 模式</div>
+                        <p class="mt-1 text-xs leading-relaxed text-slate-300">创建目标记录的同时自动生成 _minecraft._tcp SRV 记录，Minecraft 客户端连接时无需输入端口。</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <select id="record-mode" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition">
                 <option value="dns">普通 DNS</option>
                 <option value="mc">MC 模式</option>

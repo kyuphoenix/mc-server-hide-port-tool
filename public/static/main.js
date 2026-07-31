@@ -91,6 +91,7 @@ function initHomeDns() {
   refreshModeFields();
 
   initUserMenu();
+  initRecordModeInfo();
 }
 
 window.__homeDnsInit = initHomeDns;
@@ -127,6 +128,38 @@ function initUserMenu() {
     event.preventDefault();
     event.stopPropagation();
     setOpen(!isOpen());
+  });
+
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (!root.contains(target)) setOpen(false);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') setOpen(false);
+  });
+}
+
+function initRecordModeInfo() {
+  const root = el('record-mode-info');
+  const toggle = el('record-mode-info-toggle');
+  const panel = el('record-mode-info-panel');
+  if (!root || !toggle || !panel) return;
+  if (toggle.dataset.bound) return;
+  toggle.dataset.bound = '1';
+
+  const isPinnedOpen = () => !panel.classList.contains('hidden');
+
+  const setOpen = (open) => {
+    panel.classList.toggle('hidden', !open);
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  toggle.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(!isPinnedOpen());
   });
 
   document.addEventListener('click', (event) => {
