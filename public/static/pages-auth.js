@@ -82,7 +82,7 @@ function renderLogin(data) {
     <div class="mt-8 pt-6 border-t border-slate-800/60 text-center">
       <p class="text-sm text-slate-400">${"还没有账号？ "}<a href="/register" class="font-medium text-emerald-400 hover:text-emerald-300 transition">${"立即注册"}</a></p>
     </div>`;
-  return shellCard("登录账号", "Minecraft 端口隐藏服务平台", body);
+  return shellCard("登录账号", "子域名分发系统", body);
 }
 
 function renderRegister(data) {
@@ -114,7 +114,7 @@ function renderRegister(data) {
     body += oauthButtons('register', providers, '', !!settings.invite_required);
   }
   body += `<div class="mt-8 pt-6 border-t border-slate-800/60 text-center"><p class="text-sm text-slate-400">${"已有账号？ "}<a href="/login" class="font-medium text-emerald-400 hover:text-emerald-300 transition">${"去登录"}</a></p></div>`;
-  return shellCard("创建账号", "Minecraft 端口隐藏服务平台", body);
+  return shellCard("创建账号", "子域名分发系统", body);
 }
 
 function renderVerify(data) {

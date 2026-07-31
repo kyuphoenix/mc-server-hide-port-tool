@@ -1,4 +1,15 @@
 export type DnsSyncStatus = 'creating' | 'active' | 'updating' | 'error'
+export type DnsRecordMode = 'dns' | 'mc'
+export type DnsTargetType = 'A' | 'AAAA' | 'CNAME' | 'TXT' | 'SRV'
+
+export type DnsRecordDesired = {
+  server_address: string
+  port: number
+  target_type: DnsTargetType
+  record_mode: DnsRecordMode
+  proxied: boolean
+  remark: string
+}
 
 export type DnsRecordRow = {
   id: string
@@ -8,16 +19,58 @@ export type DnsRecordRow = {
   host_name: string
   server_address: string
   port: number
-  target_type: string
+  target_type: DnsTargetType
   target_record_id: string
   srv_record_id: string | null
+  record_mode: DnsRecordMode
+  proxied: number
+  remark: string
   created_at: number
   sync_status: DnsSyncStatus
   sync_error_code: string | null
   sync_updated_at: number
   pending_server_address: string | null
   pending_port: number | null
-  pending_target_type: string | null
+  pending_target_type: DnsTargetType | null
+  pending_record_mode: DnsRecordMode | null
+  pending_proxied: number | null
+  pending_remark: string | null
+}
+
+type DnsRecordCreateInput = Omit<
+  DnsRecordRow,
+  | 'id'
+  | 'created_at'
+  | 'sync_status'
+  | 'sync_error_code'
+  | 'sync_updated_at'
+  | 'pending_server_address'
+  | 'pending_port'
+  | 'pending_target_type'
+  | 'pending_record_mode'
+  | 'pending_proxied'
+  | 'pending_remark'
+  | 'record_mode'
+  | 'proxied'
+  | 'remark'
+> & {
+  id?: string
+  record_mode?: DnsRecordMode
+  proxied?: boolean | number
+  remark?: string | null
+}
+
+type DnsPendingRecordInput = Omit<
+  DnsRecordCreateInput,
+  'target_record_id' | 'srv_record_id'
+>
+
+function boolToInt(value: boolean | number | null | undefined): number {
+  return value === true || value === 1 ? 1 : 0
+}
+
+function normalizeRemark(value: string | null | undefined): string {
+  return String(value ?? '').trim().slice(0, 200)
 }
 
 export function genId(): string {
@@ -115,15 +168,16 @@ export async function findRecordByHostName(
 
 export async function insertRecord(
   db: D1Database,
-  record: Omit<DnsRecordRow, 'id' | 'created_at' | 'sync_status' | 'sync_error_code' | 'sync_updated_at' | 'pending_server_address' | 'pending_port' | 'pending_target_type'> & { id?: string }
+  record: DnsRecordCreateInput
 ): Promise<DnsRecordRow> {
   const id = record.id ?? genId()
   const created_at = Date.now()
   await db
     .prepare(
       `INSERT INTO dns_record
-        (id, user_id, root_domain, subdomain, host_name, server_address, port, target_type, target_record_id, srv_record_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, user_id, root_domain, subdomain, host_name, server_address, port, target_type,
+         target_record_id, srv_record_id, record_mode, proxied, remark, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -136,6 +190,9 @@ export async function insertRecord(
       record.target_type,
       record.target_record_id,
       record.srv_record_id,
+      record.record_mode ?? 'mc',
+      boolToInt(record.proxied),
+      normalizeRemark(record.remark),
       created_at
     )
     .run()
@@ -145,15 +202,16 @@ export async function insertRecord(
 
 export async function insertPendingRecord(
   db: D1Database,
-  record: Omit<DnsRecordRow, 'id' | 'created_at' | 'target_record_id' | 'srv_record_id' | 'sync_status' | 'sync_error_code' | 'sync_updated_at' | 'pending_server_address' | 'pending_port' | 'pending_target_type'> & { id?: string }
+  record: DnsPendingRecordInput
 ): Promise<DnsRecordRow> {
   const id = record.id ?? genId()
   const now = Date.now()
   await db.prepare(
     `INSERT INTO dns_record
       (id, user_id, root_domain, subdomain, host_name, server_address, port, target_type,
-       target_record_id, srv_record_id, created_at, sync_status, sync_error_code, sync_updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', NULL, ?, 'creating', NULL, ?)`
+       target_record_id, srv_record_id, record_mode, proxied, remark, created_at, sync_status,
+       sync_error_code, sync_updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', NULL, ?, ?, ?, ?, 'creating', NULL, ?)`
   ).bind(
     id,
     record.user_id,
@@ -163,6 +221,9 @@ export async function insertPendingRecord(
     record.server_address,
     record.port,
     record.target_type,
+    record.record_mode ?? 'mc',
+    boolToInt(record.proxied),
+    normalizeRemark(record.remark),
     now,
     now
   ).run()
@@ -172,14 +233,24 @@ export async function insertPendingRecord(
 export async function beginRecordUpdate(
   db: D1Database,
   id: string,
-  desired: { server_address: string; port: number; target_type: string }
+  desired: DnsRecordDesired
 ): Promise<DnsRecordRow | null> {
   await db.prepare(
     `UPDATE dns_record
      SET sync_status = 'updating', sync_error_code = NULL, sync_updated_at = ?,
-         pending_server_address = ?, pending_port = ?, pending_target_type = ?
+         pending_server_address = ?, pending_port = ?, pending_target_type = ?,
+         pending_record_mode = ?, pending_proxied = ?, pending_remark = ?
      WHERE id = ?`
-  ).bind(Date.now(), desired.server_address, desired.port, desired.target_type, id).run()
+  ).bind(
+    Date.now(),
+    desired.server_address,
+    desired.port,
+    desired.target_type,
+    desired.record_mode,
+    boolToInt(desired.proxied),
+    normalizeRemark(desired.remark),
+    id
+  ).run()
   return await findRecordById(db, id)
 }
 
@@ -209,22 +280,35 @@ export async function markRecordSyncError(db: D1Database, id: string, errorCode:
 export async function finalizeRecordSync(
   db: D1Database,
   id: string,
-  patch?: { server_address: string; port: number; target_type: string }
+  patch?: DnsRecordDesired
 ): Promise<DnsRecordRow | null> {
   const row = await findRecordById(db, id)
   if (!row) return null
   const desired = patch ?? {
     server_address: row.pending_server_address ?? row.server_address,
     port: row.pending_port ?? row.port,
-    target_type: row.pending_target_type ?? row.target_type
+    target_type: row.pending_target_type ?? row.target_type,
+    record_mode: row.pending_record_mode ?? row.record_mode,
+    proxied: row.pending_proxied == null ? !!row.proxied : !!row.pending_proxied,
+    remark: row.pending_remark ?? row.remark ?? ''
   }
   await db.prepare(
     `UPDATE dns_record
-     SET server_address = ?, port = ?, target_type = ?, sync_status = 'active',
-         sync_error_code = NULL, sync_updated_at = ?, pending_server_address = NULL,
-         pending_port = NULL, pending_target_type = NULL
-     WHERE id = ?`
-  ).bind(desired.server_address, desired.port, desired.target_type, Date.now(), id).run()
+     SET server_address = ?, port = ?, target_type = ?, record_mode = ?, proxied = ?, remark = ?, sync_status = 'active',
+          sync_error_code = NULL, sync_updated_at = ?, pending_server_address = NULL,
+          pending_port = NULL, pending_target_type = NULL, pending_record_mode = NULL,
+          pending_proxied = NULL, pending_remark = NULL
+      WHERE id = ?`
+  ).bind(
+    desired.server_address,
+    desired.port,
+    desired.target_type,
+    desired.record_mode,
+    boolToInt(desired.proxied),
+    normalizeRemark(desired.remark),
+    Date.now(),
+    id
+  ).run()
   return await findRecordById(db, id)
 }
 
@@ -235,15 +319,19 @@ export async function updateRecordTarget(
   patch: {
     server_address: string
     port: number
-    target_type: string
+    target_type: DnsTargetType
     target_record_id: string
     srv_record_id: string | null
+    record_mode?: DnsRecordMode
+    proxied?: boolean | number
+    remark?: string | null
   }
 ): Promise<DnsRecordRow | null> {
   await db
     .prepare(
       `UPDATE dns_record
-       SET server_address = ?, port = ?, target_type = ?, target_record_id = ?, srv_record_id = ?
+       SET server_address = ?, port = ?, target_type = ?, target_record_id = ?, srv_record_id = ?,
+           record_mode = ?, proxied = ?, remark = ?
        WHERE id = ?`
     )
     .bind(
@@ -252,9 +340,23 @@ export async function updateRecordTarget(
       patch.target_type,
       patch.target_record_id,
       patch.srv_record_id,
+      patch.record_mode ?? 'mc',
+      boolToInt(patch.proxied),
+      normalizeRemark(patch.remark),
       id
     )
     .run()
+  return await findRecordById(db, id)
+}
+
+export async function updateRecordRemark(
+  db: D1Database,
+  id: string,
+  remark: string | null | undefined
+): Promise<DnsRecordRow | null> {
+  await db.prepare(
+    `UPDATE dns_record SET remark = ?, pending_remark = NULL, sync_updated_at = ? WHERE id = ?`
+  ).bind(normalizeRemark(remark), Date.now(), id).run()
   return await findRecordById(db, id)
 }
 

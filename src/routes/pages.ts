@@ -63,8 +63,9 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login')
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
     return pageShellResponse(c, {
-      title: 'Minecraft 端口隐藏工具',
+      title: settings.site_page_title,
       page: 'home',
       scripts: ['/static/pages-home.js', '/static/main.js']
     })
@@ -147,8 +148,11 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return apiErr(c, '未登录', 401, { redirect: '/login' })
-    const records = await listRecentRecordsByUser(c.env.DB, user.id)
-    return apiOk(c, { user: serializeUser(user), records })
+    const [records, settings] = await Promise.all([
+      listRecentRecordsByUser(c.env.DB, user.id),
+      getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
+    ])
+    return apiOk(c, { user: serializeUser(user), records, settings: publicSettings(settings) })
   })
 
   app.get('/api/pages/login', async (c) => {

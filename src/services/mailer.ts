@@ -63,7 +63,7 @@ function renderMetaLines(metaLines: string[] | undefined): string {
 }
 
 export function renderMailTemplate(input: MailTemplateInput): string {
-  const brand = 'Minecraft 端口隐藏工具'
+  const brand = '子域名分发系统'
   const eyebrow = escapeHtml(input.eyebrow || brand)
   const title = escapeHtml(input.title)
   const intro = input.intro
@@ -253,7 +253,7 @@ export async function sendVerificationCode(
   const html = renderMailTemplate({
     eyebrow: '账号安全',
     title: '您的注册验证码',
-    intro: '您正在注册 Minecraft 端口隐藏工具。请使用下方验证码完成邮箱验证：',
+    intro: '您正在注册子域名分发系统。请使用下方验证码完成邮箱验证：',
     highlightLabel: '验证码',
     highlight: code,
     paragraphs: [
@@ -270,7 +270,7 @@ export async function sendTestEmail(
   env: MailBindings,
   toEmail: string
 ): Promise<MailSendResult> {
-  const subject = '[测试邮件] Minecraft 端口隐藏工具'
+  const subject = '[测试邮件] 子域名分发系统'
   const now = new Date().toLocaleString('zh-CN')
   const html = renderMailTemplate({
     eyebrow: '管理后台',

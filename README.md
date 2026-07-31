@@ -1,6 +1,6 @@
-# Minecraft 端口隐藏工具
+# 子域名分发系统
 
-基于 Cloudflare Workers + Hono + better-auth 实现的 Minecraft 端口隐藏工具。通过 Cloudflare DNS SRV 记录，让玩家无需输入端口号即可连接服务器。
+基于 Cloudflare Workers + Hono + better-auth 实现的子域名分发系统。普通模式可为用户分发 A、AAAA、CNAME、TXT、SRV 记录，A/AAAA/CNAME 可按需开启 Cloudflare 代理；MC 模式继续通过 Cloudflare DNS SRV 记录，让玩家无需输入端口号即可连接服务器。
 
 ## 主要特性
 
@@ -14,6 +14,8 @@
 - **GitHub 账号天数限制**：当存在 `provider_id=github` 的应用时，可限制最短注册天数；未达标会进入专门提示页，不会创建本地账号
 - **站点公告**：管理员可在后台发布或停用公告；用户登录、注册成功或已登录进入站点时自动弹出，支持 Markdown 与经过安全过滤的 HTML，并提供“今日不见”和“再也不见”
 - **多根域名支持**：使用 `CLOUDFLARE_DOMAINS_API_TOKEN=<域名>:<Token>,...` 汇总多个根域名；主程序运行时解析域名和 Token，同时兼容原有 `DOMAINS` 与每域 Token 配置
+- **普通 DNS 与 MC 模式**：用户可创建普通 A / AAAA / CNAME / TXT / SRV 子域名记录，A / AAAA / CNAME 可开启小黄云；选择 MC 模式时继续创建目标记录与 `_minecraft._tcp` SRV 记录。管理员可在全局设置中关闭普通 DNS 模式，关闭后用户只能创建 MC 记录
+- **网站设置**：管理员可在后台修改主页标签栏标题和主页左上角站点名称
 - **记录数量与子域名限制**：全局 `max_records_per_user` / `min_subdomain_length`；可对单用户覆盖记录上限。超级管理员与管理员创建记录时无上限，也不受最小子域名长度限制
 - **可恢复 DNS 同步**：D1 保存 pending 变更、`sync_status` 与安全错误码；外部 DNS 失败后可重试，不通过删除本地行掩盖状态
 - **可恢复用户删除**：后台删除使用持久化作业与租约分批清理 DNS，Worker 中断后可继续处理
@@ -25,7 +27,7 @@
 ## 技术栈
 
 - 运行时：Cloudflare Workers（`nodejs_compat`）
-- Web 框架：Hono（JSX SSR）
+- Web 框架：Hono（后端 shell + `public/static` 页面脚本）
 - 鉴权：better-auth（邮箱密码 + `genericOAuth`）
 - 存储：Cloudflare D1（SQLite）
 - 邮件：Resend HTTP API
@@ -66,6 +68,7 @@
 | 邮箱白/黑名单 | 按邮箱后缀限制注册 |
 | Resend | 邮箱验证码开关与发件配置 |
 | 记录限制 | 全局每用户记录上限、最小子域名长度；可覆盖单用户上限 |
+| 网站设置 | 主页标签栏标题、主页左上角名称、普通 DNS 模式启用开关 |
 | 用户管理 | 创建用户；仅超级管理员可升降管理员 |
 | OAuth 登录应用 | 添加/编辑/启停/删除第三方 OAuth；支持模板与图标 URL |
 | 站点公告 | 设置标题、正文和启用状态；每次保存生成新版本，支持 Markdown 与安全 HTML |
@@ -212,3 +215,4 @@ docs/
 - 初始化完成前，普通邮箱注册、邮箱验证完成和 OAuth 新用户创建全部关闭；Better Auth 用户创建 Hook 继续作为所有现有及未来入口的最终门禁。
 - claim token 只存在于单次 Worker 请求内存中，D1 仅保存其 SHA-256 哈希，不保存明文 token。
 - 初始化错误使用 `first_setup_security` 安全事件，字段仅限 `event`、`code`、`stage`、`timestamp`；不记录姓名、邮箱、密码、token/hash、请求体、Cookie、IP、User-Agent、原始异常或堆栈。
+- `0017_site_settings.sql` — 网站显示标题、主页名称与普通 DNS 模式开关

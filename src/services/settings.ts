@@ -11,6 +11,9 @@ export type ResendAccount = {
 }
 
 export type Settings = {
+  site_page_title: string
+  site_header_name: string
+  dns_mode_enabled: boolean
   registration_enabled: boolean
   registration_mode: 'email' | 'oauth' | 'both'
   invite_required: boolean
@@ -27,6 +30,9 @@ export type Settings = {
 }
 
 type DbRow = {
+  site_page_title: string | null
+  site_header_name: string | null
+  dns_mode_enabled: number | null
   registration_enabled: number
   registration_mode: string
   invite_required: number | null
@@ -43,6 +49,9 @@ type DbRow = {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  site_page_title: '子域名分发系统',
+  site_header_name: '子域名分发系统',
+  dns_mode_enabled: true,
   registration_enabled: true,
   registration_mode: 'email',
   invite_required: false,
@@ -204,6 +213,9 @@ export async function getSettings(
 
   const resendApiKey = await openSensitiveValue(keys, row.resend_api_key ?? '')
   return {
+    site_page_title: normalizeSiteText(row.site_page_title, DEFAULT_SETTINGS.site_page_title, 80),
+    site_header_name: normalizeSiteText(row.site_header_name, DEFAULT_SETTINGS.site_header_name, 40),
+    dns_mode_enabled: row.dns_mode_enabled == null ? DEFAULT_SETTINGS.dns_mode_enabled : !!row.dns_mode_enabled,
     registration_enabled: !!row.registration_enabled,
     registration_mode: normalizeMode(row.registration_mode),
     invite_required: !!row.invite_required,
@@ -230,10 +242,15 @@ export async function updateSettings(
   const storedResendApiKey = serialized.resend_api_key
     ? await sealSensitiveValue(keys, serialized.resend_api_key)
     : ''
+  const sitePageTitle = normalizeSiteText(next.site_page_title, DEFAULT_SETTINGS.site_page_title, 80)
+  const siteHeaderName = normalizeSiteText(next.site_header_name, DEFAULT_SETTINGS.site_header_name, 40)
 
   await db
     .prepare(
       `UPDATE settings SET
+        site_page_title = ?,
+        site_header_name = ?,
+        dns_mode_enabled = ?,
         registration_enabled = ?,
         registration_mode = ?,
         invite_required = ?,
@@ -250,6 +267,9 @@ export async function updateSettings(
       WHERE id = ?`
     )
     .bind(
+      sitePageTitle,
+      siteHeaderName,
+      next.dns_mode_enabled ? 1 : 0,
       next.registration_enabled ? 1 : 0,
       next.registration_mode,
       next.invite_required ? 1 : 0,
@@ -268,7 +288,12 @@ export async function updateSettings(
     .run()
 
   invalidateSettingsCache(db)
-  return next
+  return { ...next, site_page_title: sitePageTitle, site_header_name: siteHeaderName }
+}
+
+function normalizeSiteText(value: string | null | undefined, fallback: string, maxLength: number): string {
+  const text = String(value ?? '').trim().replace(/\s+/g, ' ')
+  return (text || fallback).slice(0, maxLength)
 }
 
 function normalizeMode(m: string): 'email' | 'oauth' | 'both' {

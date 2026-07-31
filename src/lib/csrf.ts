@@ -13,7 +13,7 @@ export function getRequestCsrf(c: Context): { token: string; setCookie: string |
 }
 
 export function csrfField(token: string): string {
-  // Used in places where JSX prop injection is awkward.
+  // Used by form HTML snippets that need a hidden CSRF value.
   return `<input type="hidden" name="csrf_token" value="${token}" />`
 }
 

@@ -9,15 +9,24 @@ import {
 } from './app-core.js';
 
 function renderRecordRow(r) {
+  const mode = r.record_mode === 'dns' ? '普通 DNS' : 'MC 模式';
+  const type = String(r.target_type || '');
+  const port = r.record_mode === 'mc' || type === 'SRV' ? String(r.port || '') : '-';
+  const proxied = r.record_mode === 'dns' && ['A', 'AAAA', 'CNAME'].includes(type) ? (Number(r.proxied || 0) > 0 ? '小黄云' : 'DNS only') : '-';
+  const remark = String(r.remark || '').trim();
   return `
     <tr class="hover:bg-slate-900/40 transition" data-record-id="${escapeAttr(r.id)}">
       <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="点击即可选择复制">${escapeHtml(r.host_name)}</td>
+      <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(mode)}</td>
+      <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(r.target_type || '')}</td>
       <td class="py-4 px-4 font-mono-custom text-slate-300 break-all">${escapeHtml(r.server_address)}</td>
-      <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(String(r.port))}</td>
+      <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(proxied)}</td>
+      <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(port)}</td>
+      <td class="py-4 px-4 text-slate-300 break-all">${remark ? escapeHtml(remark) : '<span class="text-slate-600">-</span>'}</td>
       <td class="py-4 px-4 text-slate-400 text-xs">${escapeHtml(formatDate(r.created_at))}</td>
       <td class="py-4 px-4 text-right">
         <div class="inline-flex items-center gap-2">
-          <button type="button" data-edit-id="${escapeAttr(r.id)}" data-host-name="${escapeAttr(r.host_name)}" data-root-domain="${escapeAttr(r.root_domain)}" data-subdomain="${escapeAttr(r.subdomain)}" data-server-address="${escapeAttr(r.server_address)}" data-port="${escapeAttr(String(r.port))}" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition active:scale-[0.98]">修改</button>
+          <button type="button" data-edit-id="${escapeAttr(r.id)}" data-host-name="${escapeAttr(r.host_name)}" data-root-domain="${escapeAttr(r.root_domain)}" data-subdomain="${escapeAttr(r.subdomain)}" data-server-address="${escapeAttr(r.server_address)}" data-port="${escapeAttr(String(r.port || ''))}" data-mode="${escapeAttr(r.record_mode || 'mc')}" data-target-type="${escapeAttr(r.target_type || '')}" data-proxied="${Number(r.proxied || 0) > 0 ? '1' : '0'}" data-remark="${escapeAttr(remark)}" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition active:scale-[0.98]">修改</button>
           <button type="button" data-delete-id="${escapeAttr(r.id)}" class="px-3 py-1.5 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg transition active:scale-[0.98]">删除</button>
         </div>
       </td>
@@ -27,19 +36,20 @@ function renderRecordRow(r) {
 function renderHome(data) {
   const user = data.user;
   const records = data.records || [];
+  const siteName = data.settings?.site_header_name || '子域名分发系统';
   const displayName = (user.name || '').trim() || user.email;
   const isAdmin = user.role === 'admin';
   const rows = records.length
     ? records.map(renderRecordRow).join('')
-    : `<tr data-empty-row="1"><td colspan="5" class="py-12 text-center text-slate-500"><div class="flex flex-col items-center justify-center gap-3"><svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg><span>暂无记录，快去左侧创建一条吧！</span></div></td></tr>`;
+    : `<tr data-empty-row="1"><td colspan="9" class="py-12 text-center text-slate-500"><div class="flex flex-col items-center justify-center gap-3"><svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg><span>暂无记录，快去左侧创建一条吧！</span></div></td></tr>`;
 
   return `
   <div class="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black pb-12">
     <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-10">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold font-mono-custom text-lg">M</div>
-          <span class="font-bold text-white tracking-wide hidden sm:inline-block">Minecraft 端口隐藏工具</span>
+         <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold font-mono-custom text-lg">M</div>
+          <span class="font-bold text-white tracking-wide hidden sm:inline-block">${escapeHtml(siteName)}</span>
         </div>
         <div class="relative text-sm" id="user-menu">
           <button type="button" id="user-menu-toggle" class="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-slate-200 hover:bg-slate-900 hover:border-slate-700 transition" aria-haspopup="menu" aria-expanded="false">
@@ -66,28 +76,53 @@ function renderHome(data) {
     <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-10">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div class="lg:col-span-1 bg-slate-900/60 backdrop-blur border border-slate-800 rounded-2xl p-6 h-fit shadow-xl">
-          <h3 id="form-title" class="text-lg font-bold text-white mb-6 flex items-center gap-2">一键隐藏端口</h3>
+          <h3 id="form-title" class="text-lg font-bold text-white mb-6 flex items-center gap-2">创建 DNS 记录</h3>
           <div class="space-y-4">
             <input type="hidden" id="editing-id" value="" />
-            <div id="editing-banner" class="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">正在修改已有记录：主机名不可更改，仅更新目标地址与端口。</div>
+            <div id="editing-banner" class="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">正在修改已有记录：主机名不可更改，仅更新模式、目标和代理状态。</div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">记录模式</label>
+              <select id="record-mode" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition">
+                <option value="dns">普通 DNS</option>
+                <option value="mc">MC 模式</option>
+              </select>
+            </div>
             <div>
               <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">期望的子域名</label>
               <div class="flex items-center bg-slate-950/60 border border-slate-800 rounded-xl focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500 overflow-hidden transition">
-                <input type="text" id="subdomain" placeholder="如 play" class="w-full px-4 py-3 bg-transparent text-white placeholder-slate-500 focus:outline-none" />
+                <input type="text" id="subdomain" placeholder="如 www 或 api" class="w-full px-4 py-3 bg-transparent text-white placeholder-slate-500 focus:outline-none" />
                 <span class="px-2 text-slate-600 font-bold">.</span>
                 <select id="root-domain" class="bg-slate-900 border-l border-slate-800 text-slate-300 py-3 px-3 focus:outline-none text-sm cursor-pointer rounded-r-xl"><option value="">加载中...</option></select>
               </div>
             </div>
             <div>
-              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">真实服务器地址 (IP/域名)</label>
-              <input type="text" id="server-address" placeholder="例如 124.223.x.x 或 sub.domain.com" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition" />
+              <label id="server-address-label" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">记录内容</label>
+              <input type="text" id="server-address" placeholder="例如 192.0.2.10 或 target.example.com" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition" />
             </div>
-            <div>
+            <div id="record-type-group">
+              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">记录类型</label>
+              <select id="record-type" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition font-mono-custom">
+                <option value="A">A</option>
+                <option value="AAAA">AAAA</option>
+                <option value="CNAME">CNAME</option>
+                <option value="TXT">TXT</option>
+                <option value="SRV">SRV</option>
+              </select>
+            </div>
+            <label id="proxied-group" class="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
+              <input type="checkbox" id="proxied" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500" />
+              <span>开启小黄云</span>
+            </label>
+            <div id="port-group" class="hidden">
               <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">端口</label>
               <input type="number" id="port" placeholder="例如 25565" value="" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition font-mono-custom" />
             </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">备注（选填）</label>
+              <textarea id="remark" maxlength="200" rows="3" placeholder="记录用途、项目名或到期说明" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition resize-y"></textarea>
+            </div>
             <div class="mt-2 flex gap-2">
-              <button id="btn" disabled class="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 disabled:cursor-not-allowed text-white font-medium rounded-xl transition duration-200 transform active:scale-[0.98] shadow-lg shadow-emerald-950/50">一键生成</button>
+              <button id="btn" disabled class="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 disabled:cursor-not-allowed text-white font-medium rounded-xl transition duration-200 transform active:scale-[0.98] shadow-lg shadow-emerald-950/50">创建记录</button>
               <button type="button" id="cancel-edit-btn" class="hidden px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl border border-slate-700 transition">取消</button>
             </div>
           </div>
@@ -104,8 +139,12 @@ function renderHome(data) {
               <thead>
                 <tr class="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   <th class="py-4 px-4">主机名</th>
-                  <th class="py-4 px-4">目标服务器</th>
+                  <th class="py-4 px-4">模式</th>
+                  <th class="py-4 px-4">类型</th>
+                  <th class="py-4 px-4">记录内容</th>
+                  <th class="py-4 px-4">代理</th>
                   <th class="py-4 px-4">端口</th>
+                  <th class="py-4 px-4">备注</th>
                   <th class="py-4 px-4">创建时间</th>
                   <th class="py-4 px-4 text-right">操作</th>
                 </tr>

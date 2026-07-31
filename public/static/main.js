@@ -21,14 +21,16 @@ function csrfHeaders(extra = {}) {
   };
 }
 
-/** @type {{ minSubdomainLength: number, recordLimit: number|null }} */
+/** @type {{ minSubdomainLength: number, recordLimit: number|null, dnsModeEnabled: boolean }} */
 let domainMeta = {
   minSubdomainLength: 0,
-  recordLimit: null
+  recordLimit: null,
+  dnsModeEnabled: true
 };
 
 /** @type {string|null} */
 let editingId = null;
+/** @type {boolean} */ let editingIsDns = false;
 
 function el(id) {
   return document.getElementById(id);
@@ -40,6 +42,14 @@ function getRootDomainSelect() { return el('root-domain'); }
 function getSubdomainInput() { return el('subdomain'); }
 function getServerAddressInput() { return el('server-address'); }
 function getPortInput() { return el('port'); }
+function getRecordModeSelect() { return el('record-mode'); }
+function getRecordTypeSelect() { return el('record-type'); }
+function getProxiedInput() { return el('proxied'); }
+function getPortGroup() { return el('port-group'); }
+function getRecordTypeGroup() { return el('record-type-group'); }
+function getProxiedGroup() { return el('proxied-group'); }
+function getServerAddressLabel() { return el('server-address-label'); }
+function getRemarkInput() { return el('remark'); }
 function getEditingIdInput() { return el('editing-id'); }
 function getEditingBanner() { return el('editing-banner'); }
 function getFormTitle() { return el('form-title'); }
@@ -67,6 +77,18 @@ function initHomeDns() {
     button.dataset.bound = '1';
     button.addEventListener('click', submitDnsForm);
   }
+
+  const recordModeSelect = getRecordModeSelect();
+  if (recordModeSelect && !recordModeSelect.dataset.bound) {
+    recordModeSelect.dataset.bound = '1';
+    recordModeSelect.addEventListener('change', refreshModeFields);
+  }
+  const recordTypeSelect = getRecordTypeSelect();
+  if (recordTypeSelect && !recordTypeSelect.dataset.bound) {
+    recordTypeSelect.dataset.bound = '1';
+    recordTypeSelect.addEventListener('change', refreshModeFields);
+  }
+  refreshModeFields();
 
   initUserMenu();
 }
@@ -118,6 +140,84 @@ function initUserMenu() {
   });
 }
 
+function getRecordMode() {
+  const select = getRecordModeSelect();
+  return select && select.value === 'mc' ? 'mc' : 'dns';
+}
+
+function getRecordType() {
+  const select = getRecordTypeSelect();
+  return select ? String(select.value || 'A').toUpperCase() : 'A';
+}
+
+function needsPort(mode = getRecordMode(), type = getRecordType()) {
+  return mode === 'mc' || type === 'SRV';
+}
+
+function canProxy(mode = getRecordMode(), type = getRecordType()) {
+  return mode === 'dns' && ['A', 'AAAA', 'CNAME'].includes(type);
+}
+
+function refreshModeFields() {
+  const mode = getRecordMode();
+  const type = getRecordType();
+  const portGroup = getPortGroup();
+  const recordTypeGroup = getRecordTypeGroup();
+  const proxiedGroup = getProxiedGroup();
+  const subdomainInput = getSubdomainInput();
+  const serverAddressLabel = getServerAddressLabel();
+  const serverAddressInput = getServerAddressInput();
+  const proxiedInput = getProxiedInput();
+  const button = getButton();
+
+  const modeSelect = getRecordModeSelect();
+  if (modeSelect) {
+    const dnsOption = modeSelect.querySelector('option[value="dns"]');
+    if (dnsOption) {
+      const dnsAvailable = domainMeta.dnsModeEnabled || editingIsDns;
+      dnsOption.disabled = !dnsAvailable;
+      dnsOption.textContent = domainMeta.dnsModeEnabled ? '普通 DNS' : '普通 DNS（已关闭）';
+    }
+    if (!domainMeta.dnsModeEnabled && !editingIsDns && modeSelect.value !== 'mc') {
+      modeSelect.value = 'mc';
+    }
+    mode = getRecordMode();
+    type = getRecordType();
+  }
+  if (portGroup) portGroup.classList.toggle('hidden', !needsPort(mode, type));
+  if (recordTypeGroup) recordTypeGroup.classList.toggle('hidden', mode !== 'dns');
+  if (proxiedGroup) proxiedGroup.classList.toggle('hidden', !canProxy(mode, type));
+  if (proxiedInput && !canProxy(mode, type)) proxiedInput.checked = false;
+  if (subdomainInput && !subdomainInput.disabled) {
+    subdomainInput.placeholder = mode === 'mc'
+      ? '如 play'
+      : type === 'TXT'
+        ? '如 _acme-challenge 或 selector1._domainkey'
+        : type === 'SRV'
+          ? '如 _sip._tcp.voice'
+          : '如 www 或 api';
+  }
+  if (serverAddressLabel) {
+    serverAddressLabel.textContent = mode === 'mc'
+      ? '真实服务器地址 (IP/域名)'
+      : type === 'TXT'
+        ? 'TXT 内容'
+        : type === 'SRV'
+          ? 'SRV 目标域名'
+          : '记录内容';
+  }
+  if (serverAddressInput) {
+    serverAddressInput.placeholder = mode === 'mc'
+      ? '例如 124.223.x.x 或 sub.domain.com'
+      : type === 'TXT'
+        ? '例如 v=spf1 include:_spf.example.com ~all'
+        : type === 'SRV'
+          ? '例如 target.example.com'
+          : '例如 192.0.2.10 或 target.example.com';
+  }
+  if (button && !editingId) button.textContent = mode === 'mc' ? '创建 MC 记录' : '创建 DNS 记录';
+}
+
 async function loadDomains() {
   const rootDomainSelect = getRootDomainSelect();
   const button = getButton();
@@ -146,6 +246,7 @@ async function loadDomains() {
       data.record_limit === null || data.record_limit === undefined
         ? null
         : Number(data.record_limit);
+    domainMeta.dnsModeEnabled = data.dns_mode_enabled !== false;
 
     if (typeof data.record_count === 'number') {
       setRecordCount(data.record_count);
@@ -154,6 +255,7 @@ async function loadDomains() {
     }
 
     setButtonEnabled(true);
+    refreshModeFields();
   } catch (error) {
     rootDomainSelect.innerHTML = '<option value="">域名加载失败</option>';
     showToast(
@@ -220,7 +322,7 @@ function ensureEmptyState() {
       const tr = document.createElement('tr');
       tr.setAttribute('data-empty-row', '1');
       tr.innerHTML = `
-        <td colspan="5" class="py-12 text-center text-slate-500">
+        <td colspan="9" class="py-12 text-center text-slate-500">
           <div class="flex flex-col items-center justify-center gap-3">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
@@ -239,10 +341,19 @@ function createRecordRow(record) {
   const tr = document.createElement('tr');
   tr.className = 'hover:bg-slate-900/40 transition';
   tr.setAttribute('data-record-id', record.id);
+  const mode = record.record_mode === 'dns' ? '普通 DNS' : 'MC 模式';
+  const type = String(record.target_type || '');
+  const port = record.record_mode === 'mc' || type === 'SRV' ? String(record.port || '') : '-';
+  const proxied = record.record_mode === 'dns' && ['A', 'AAAA', 'CNAME'].includes(type) ? (Number(record.proxied || 0) > 0 ? '小黄云' : 'DNS only') : '-';
+  const remark = String(record.remark || '').trim();
   tr.innerHTML = `
     <td class="py-4 px-4 font-mono-custom text-emerald-400 break-all select-all cursor-pointer" title="点击即可选择复制">${escapeHtml(record.host_name)}</td>
+    <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(mode)}</td>
+    <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(type)}</td>
     <td class="py-4 px-4 font-mono-custom text-slate-300 break-all">${escapeHtml(record.server_address)}</td>
-    <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(String(record.port))}</td>
+    <td class="py-4 px-4 text-slate-300 text-xs">${escapeHtml(proxied)}</td>
+    <td class="py-4 px-4 font-mono-custom text-slate-300">${escapeHtml(port)}</td>
+    <td class="py-4 px-4 text-slate-300 break-all">${remark ? escapeHtml(remark) : '<span class="text-slate-600">-</span>'}</td>
     <td class="py-4 px-4 text-slate-400 text-xs">${escapeHtml(formatDate(record.created_at))}</td>
     <td class="py-4 px-4 text-right">
       <div class="inline-flex items-center gap-2">
@@ -253,7 +364,11 @@ function createRecordRow(record) {
           data-root-domain="${escapeAttr(record.root_domain)}"
           data-subdomain="${escapeAttr(record.subdomain)}"
           data-server-address="${escapeAttr(record.server_address)}"
-          data-port="${escapeAttr(String(record.port))}"
+          data-port="${escapeAttr(String(record.port || ''))}"
+          data-mode="${escapeAttr(record.record_mode || 'mc')}"
+          data-target-type="${escapeAttr(record.target_type || '')}"
+          data-proxied="${Number(record.proxied || 0) > 0 ? '1' : '0'}"
+          data-remark="${escapeAttr(remark)}"
           class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition active:scale-[0.98]"
         >
           修改
@@ -344,6 +459,10 @@ function setEditMode(record) {
   const rootDomainSelect = getRootDomainSelect();
   const serverAddressInput = getServerAddressInput();
   const portInput = getPortInput();
+  const recordModeSelect = getRecordModeSelect();
+  const recordTypeSelect = getRecordTypeSelect();
+  const proxiedInput = getProxiedInput();
+  const remarkInput = getRemarkInput();
   const button = getButton();
   if (editingIdInput) editingIdInput.value = record.id;
   if (editingBanner) editingBanner.classList.remove('hidden');
@@ -359,9 +478,15 @@ function setEditMode(record) {
     rootDomainSelect.disabled = true;
     rootDomainSelect.classList.add('opacity-60', 'cursor-not-allowed');
   }
+  if (recordModeSelect) recordModeSelect.value = record.record_mode === 'dns' ? 'dns' : 'mc';
+  editingIsDns = record.record_mode === 'dns';
+  if (recordTypeSelect && record.target_type) recordTypeSelect.value = record.target_type;
+  if (proxiedInput) proxiedInput.checked = Number(record.proxied || 0) > 0;
   if (serverAddressInput) serverAddressInput.value = record.server_address || '';
   if (portInput) portInput.value = String(record.port || '');
+  if (remarkInput) remarkInput.value = record.remark || '';
   if (button) button.textContent = '保存修改';
+  refreshModeFields();
   setButtonEnabled(true);
   if (serverAddressInput) serverAddressInput.focus();
 }
@@ -375,10 +500,12 @@ function clearEditMode() {
   const subdomainInput = getSubdomainInput();
   const rootDomainSelect = getRootDomainSelect();
   const button = getButton();
+  const remarkInput = getRemarkInput();
   if (editingIdInput) editingIdInput.value = '';
   if (editingBanner) editingBanner.classList.add('hidden');
   if (cancelEditBtn) cancelEditBtn.classList.add('hidden');
-  if (formTitle) formTitle.textContent = '一键隐藏端口';
+  if (formTitle) formTitle.textContent = '创建 DNS 记录';
+  editingIsDns = false;
   if (subdomainInput) {
     subdomainInput.disabled = false;
     subdomainInput.classList.remove('opacity-60', 'cursor-not-allowed');
@@ -387,7 +514,9 @@ function clearEditMode() {
     rootDomainSelect.disabled = false;
     rootDomainSelect.classList.remove('opacity-60', 'cursor-not-allowed');
   }
-  if (button) button.textContent = '一键生成';
+  refreshModeFields();
+  if (button) button.textContent = getRecordMode() === 'mc' ? '创建 MC 记录' : '创建 DNS 记录';
+  if (remarkInput) remarkInput.value = '';
   setButtonEnabled(Boolean(rootDomainSelect && rootDomainSelect.value));
 }
 
@@ -397,13 +526,18 @@ async function onRecordsClick(event) {
 
   const editBtn = target.closest('[data-edit-id]');
   if (editBtn) {
+    editingIsDns = String(editBtn.getAttribute('data-mode') || 'mc') === 'dns';
     setEditMode({
       id: editBtn.getAttribute('data-edit-id') || '',
       host_name: editBtn.getAttribute('data-host-name') || '',
       root_domain: editBtn.getAttribute('data-root-domain') || '',
       subdomain: editBtn.getAttribute('data-subdomain') || '',
       server_address: editBtn.getAttribute('data-server-address') || '',
-      port: Number(editBtn.getAttribute('data-port') || 0)
+      port: Number(editBtn.getAttribute('data-port') || 0),
+      record_mode: editBtn.getAttribute('data-mode') || 'mc',
+      target_type: editBtn.getAttribute('data-target-type') || '',
+      proxied: editBtn.getAttribute('data-proxied') === '1' ? 1 : 0,
+      remark: editBtn.getAttribute('data-remark') || ''
     });
     return;
   }
@@ -440,14 +574,15 @@ async function onRecordsClick(event) {
     } else {
       setRecordCount(Math.max(0, getRecordCount() - 1));
     }
-    if (data.record_limit !== undefined) {
-      domainMeta.recordLimit =
-        data.record_limit === null || data.record_limit === undefined
-          ? null
-          : Number(data.record_limit);
-      refreshHint();
-    }
-    showToast(data.message || '记录已删除', 'success');
+   if (data.record_limit !== undefined) {
+     domainMeta.recordLimit =
+       data.record_limit === null || data.record_limit === undefined
+         ? null
+         : Number(data.record_limit);
+      domainMeta.dnsModeEnabled = data.dns_mode_enabled !== false;
+     refreshHint();
+   }
+   showToast(data.message || '记录已删除', 'success');
   } catch (error) {
     showToast(error instanceof Error ? error.message : '删除失败', 'error');
   } finally {
@@ -469,14 +604,21 @@ async function createDnsRecords() {
   const rootDomainSelect = getRootDomainSelect();
   const serverAddressInput = getServerAddressInput();
   const portInput = getPortInput();
+  const recordTypeSelect = getRecordTypeSelect();
+  const proxiedInput = getProxiedInput();
+  const remarkInput = getRemarkInput();
   const button = getButton();
   if (!subdomainInput || !rootDomainSelect || !serverAddressInput || !portInput || !button) return;
+  const mode = getRecordMode();
   const subdomain = subdomainInput.value.trim();
   const rootDomain = rootDomainSelect.value;
   const serverAddress = serverAddressInput.value.trim();
   const port = portInput.value.trim();
+  const recordType = recordTypeSelect ? recordTypeSelect.value : 'A';
+  const proxied = Boolean(proxiedInput && proxiedInput.checked);
+  const remark = remarkInput ? remarkInput.value.trim() : '';
 
-  if (!subdomain || !rootDomain || !serverAddress || !port) {
+  if (!subdomain || !rootDomain || !serverAddress || (needsPort(mode, recordType) && !port)) {
     showToast('请完整填写信息！', 'error');
     return;
   }
@@ -490,10 +632,14 @@ async function createDnsRecords() {
       headers: csrfHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
       credentials: 'same-origin',
       body: JSON.stringify({
+        mode,
         subdomain,
         rootDomain,
         serverAddress,
-        port: Number(port)
+        port: needsPort(mode, recordType) ? Number(port) : undefined,
+        recordType,
+        proxied,
+        remark
       })
     });
 
@@ -516,15 +662,18 @@ async function createDnsRecords() {
         data.record_limit === null || data.record_limit === undefined
           ? null
           : Number(data.record_limit);
+      domainMeta.dnsModeEnabled = data.dns_mode_enabled !== false;
       refreshHint();
     }
 
     subdomainInput.value = '';
+    if (remarkInput) remarkInput.value = '';
     showToast(data.message || 'DNS 记录创建成功', 'success');
   } catch (error) {
     showToast('网络请求失败，请检查 Worker 服务', 'error');
   } finally {
-    button.textContent = '一键生成';
+    button.textContent = getRecordMode() === 'mc' ? '创建 MC 记录' : '创建 DNS 记录';
+    refreshModeFields();
     setButtonEnabled(Boolean(rootDomainSelect.value));
   }
 }
@@ -532,13 +681,20 @@ async function createDnsRecords() {
 async function updateDnsRecord(id) {
   const serverAddressInput = getServerAddressInput();
   const portInput = getPortInput();
+  const recordTypeSelect = getRecordTypeSelect();
+  const proxiedInput = getProxiedInput();
+  const remarkInput = getRemarkInput();
   const button = getButton();
   const rootDomainSelect = getRootDomainSelect();
   if (!serverAddressInput || !portInput || !button) return;
+  const mode = getRecordMode();
   const serverAddress = serverAddressInput.value.trim();
   const port = portInput.value.trim();
-  if (!serverAddress || !port) {
-    showToast('请填写目标地址和端口', 'error');
+  const recordType = recordTypeSelect ? recordTypeSelect.value : 'A';
+  const proxied = Boolean(proxiedInput && proxiedInput.checked);
+  const remark = remarkInput ? remarkInput.value.trim() : '';
+  if (!serverAddress || (needsPort(mode, recordType) && !port)) {
+    showToast(needsPort(mode, recordType) ? '请填写目标地址和端口' : '请填写记录内容', 'error');
     return;
   }
 
@@ -550,8 +706,12 @@ async function updateDnsRecord(id) {
       headers: csrfHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
       credentials: 'same-origin',
       body: JSON.stringify({
+        mode,
         serverAddress,
-        port: Number(port)
+        port: needsPort(mode, recordType) ? Number(port) : undefined,
+        recordType,
+        proxied,
+        remark
       })
     });
     const data = await res.json().catch(() => ({}));
@@ -570,7 +730,7 @@ async function updateDnsRecord(id) {
       button.textContent = '保存修改';
       setButtonEnabled(true);
     } else {
-      button.textContent = '一键生成';
+      button.textContent = getRecordMode() === 'mc' ? '创建 MC 记录' : '创建 DNS 记录';
       setButtonEnabled(Boolean(rootDomainSelect.value));
     }
   }

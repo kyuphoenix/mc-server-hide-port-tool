@@ -87,6 +87,8 @@ export async function requireJsonMutation(c: Context): Promise<Response | null> 
 }
 
 export function publicSettings(settings: {
+  site_header_name: string
+  dns_mode_enabled: boolean
   registration_enabled: boolean
   registration_mode: string
   invite_required: boolean
@@ -94,6 +96,8 @@ export function publicSettings(settings: {
   resend_enabled: boolean
   resend_accounts: unknown[]
 }): {
+  site_header_name: string
+  dns_mode_enabled: boolean
   registration_enabled: boolean
   registration_mode: string
   invite_required: boolean
@@ -101,6 +105,8 @@ export function publicSettings(settings: {
   email_verification_required: boolean
 } {
   return {
+    site_header_name: settings.site_header_name,
+    dns_mode_enabled: settings.dns_mode_enabled,
     registration_enabled: settings.registration_enabled,
     registration_mode: settings.registration_mode,
     invite_required: settings.invite_required,
@@ -110,6 +116,9 @@ export function publicSettings(settings: {
 }
 
 export function maskSettingsForAdmin(settings: {
+  site_page_title: string
+  site_header_name: string
+  dns_mode_enabled: boolean
   registration_enabled: boolean
   registration_mode: string
   invite_required: boolean
@@ -124,6 +133,9 @@ export function maskSettingsForAdmin(settings: {
   min_subdomain_length: number
 }) {
   return {
+    site_page_title: settings.site_page_title,
+    site_header_name: settings.site_header_name,
+    dns_mode_enabled: settings.dns_mode_enabled,
     registration_enabled: settings.registration_enabled,
     registration_mode: settings.registration_mode,
     invite_required: settings.invite_required,

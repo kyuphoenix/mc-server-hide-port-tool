@@ -287,6 +287,255 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     ).first()).toEqual({ count: 0 })
   })
 
+  it('creates a proxied plain DNS record without SRV', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    const lookupNames: string[] = []
+    const recordBodies: Record<string, unknown>[] = []
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      const method = String(init?.method ?? 'GET').toUpperCase()
+
+      if (url.includes('/zones?')) {
+        return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+      }
+      if (url.includes('/dns_records?')) {
+        lookupNames.push(new URL(url).searchParams.get('name.exact') || '')
+        return Response.json({ success: true, result: [] })
+      }
+      if (method === 'POST') {
+        const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+        recordBodies.push(body)
+        return Response.json({
+          success: true,
+          result: { id: 'plain-target', name: body.name, type: body.type, content: body.content }
+        })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const response = await postJson(env, '/api/create-dns', {
+      mode: 'dns',
+      subdomain: 'www',
+      rootDomain: 'example.test',
+      recordType: 'A',
+      serverAddress: '198.51.100.20',
+      proxied: true,
+      remark: 'Frontend entry'
+    }, headers)
+    const body = await response.json() as { record?: Record<string, unknown> }
+
+    expect(response.status).toBe(200)
+    expect(lookupNames).toEqual(['www.example.test'])
+    expect(recordBodies).toEqual([{
+      type: 'A',
+      name: 'www.example.test',
+      content: '198.51.100.20',
+      ttl: 1,
+      proxied: true
+    }])
+    expect(body.record).toMatchObject({
+      record_mode: 'dns',
+      target_type: 'A',
+      proxied: 1,
+      srv_record_id: null,
+      port: 0,
+      remark: 'Frontend entry'
+    })
+    expect(await db.prepare(
+      `SELECT record_mode, target_type, proxied, srv_record_id, port, remark
+       FROM dns_record WHERE host_name = ?`
+    ).bind('www.example.test').first()).toEqual({
+      record_mode: 'dns',
+      target_type: 'A',
+      proxied: 1,
+      srv_record_id: null,
+      port: 0,
+      remark: 'Frontend entry'
+    })
+  })
+
+  it('creates a plain TXT record without proxy or SRV', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    const lookupNames: string[] = []
+    const recordBodies: Record<string, unknown>[] = []
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      const method = String(init?.method ?? 'GET').toUpperCase()
+
+      if (url.includes('/zones?')) {
+        return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+      }
+      if (url.includes('/dns_records?')) {
+        lookupNames.push(new URL(url).searchParams.get('name.exact') || '')
+        return Response.json({ success: true, result: [] })
+      }
+      if (method === 'POST') {
+        const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+        recordBodies.push(body)
+        return Response.json({
+          success: true,
+          result: { id: 'txt-target', name: body.name, type: body.type, content: body.content }
+        })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const response = await postJson(env, '/api/create-dns', {
+      mode: 'dns',
+      subdomain: '_acme-challenge',
+      rootDomain: 'example.test',
+      recordType: 'TXT',
+      serverAddress: 'Token=MixedCase123',
+      proxied: true,
+      remark: 'ACME validation'
+    }, headers)
+    const body = await response.json() as { record?: Record<string, unknown> }
+
+    expect(response.status).toBe(200)
+    expect(lookupNames).toEqual(['_acme-challenge.example.test'])
+    expect(recordBodies).toEqual([{
+      type: 'TXT',
+      name: '_acme-challenge.example.test',
+      content: 'Token=MixedCase123',
+      ttl: 1
+    }])
+    expect(body.record).toMatchObject({
+      record_mode: 'dns',
+      target_type: 'TXT',
+      proxied: 0,
+      srv_record_id: null,
+      port: 0,
+      remark: 'ACME validation'
+    })
+    expect(await db.prepare(
+      `SELECT server_address, record_mode, target_type, proxied, srv_record_id, port, remark
+       FROM dns_record WHERE host_name = ?`
+    ).bind('_acme-challenge.example.test').first()).toEqual({
+      server_address: 'Token=MixedCase123',
+      record_mode: 'dns',
+      target_type: 'TXT',
+      proxied: 0,
+      srv_record_id: null,
+      port: 0,
+      remark: 'ACME validation'
+    })
+  })
+
+  it('creates a plain SRV record without Minecraft helper records', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    const lookupNames: string[] = []
+    const recordBodies: Record<string, unknown>[] = []
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      const method = String(init?.method ?? 'GET').toUpperCase()
+
+      if (url.includes('/zones?')) {
+        return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+      }
+      if (url.includes('/dns_records?')) {
+        lookupNames.push(new URL(url).searchParams.get('name.exact') || '')
+        return Response.json({ success: true, result: [] })
+      }
+      if (method === 'POST') {
+        const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+        recordBodies.push(body)
+        return Response.json({
+          success: true,
+          result: { id: 'srv-target', name: body.name, type: body.type }
+        })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const response = await postJson(env, '/api/create-dns', {
+      mode: 'dns',
+      subdomain: '_sip._tcp.voice',
+      rootDomain: 'example.test',
+      recordType: 'SRV',
+      serverAddress: 'target.example.com',
+      port: 5060,
+      proxied: true,
+      remark: 'Voice service'
+    }, headers)
+    const body = await response.json() as { record?: Record<string, unknown> }
+
+    expect(response.status).toBe(200)
+    expect(lookupNames).toEqual(['_sip._tcp.voice.example.test'])
+    expect(recordBodies).toEqual([{
+      type: 'SRV',
+      name: '_sip._tcp.voice.example.test',
+      ttl: 1,
+      data: { priority: 0, weight: 5, port: 5060, target: 'target.example.com' }
+    }])
+    expect(body.record).toMatchObject({
+      record_mode: 'dns',
+      target_type: 'SRV',
+      proxied: 0,
+      srv_record_id: null,
+      port: 5060,
+      remark: 'Voice service'
+    })
+    expect(await db.prepare(
+      `SELECT server_address, record_mode, target_type, proxied, srv_record_id, port, remark
+       FROM dns_record WHERE host_name = ?`
+    ).bind('_sip._tcp.voice.example.test').first()).toEqual({
+      server_address: 'target.example.com',
+      record_mode: 'dns',
+      target_type: 'SRV',
+      proxied: 0,
+      srv_record_id: null,
+      port: 5060,
+      remark: 'Voice service'
+    })
+  })
+
+  it('updates a record remark without calling Cloudflare', async () => {
+    const { db, env } = await setup()
+    const headers = await adminHeaders(db, env)
+    await seedDnsRecord(db)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected Cloudflare call'))
+
+    const response = await postJson(env, '/api/dns/record-one/update', {
+      mode: 'mc',
+      serverAddress: '198.51.100.10',
+      port: 25565,
+      remark: 'Primary survival server'
+    }, headers)
+    const body = await response.json() as { record?: Record<string, unknown>; message?: string }
+
+    expect(response.status).toBe(200)
+    expect(body.message).toBe('备注已更新')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(body.record).toMatchObject({
+      id: 'record-one',
+      remark: 'Primary survival server'
+    })
+    expect(await db.prepare(
+      'SELECT remark, pending_remark FROM dns_record WHERE id = ?'
+    ).bind('record-one').first()).toEqual({
+      remark: 'Primary survival server',
+      pending_remark: null
+    })
+  })
+
   it('persists and resumes a partially-created DNS record', async () => {
     const { db, env } = await setup()
     const headers = await adminHeaders(db, env)
@@ -480,3 +729,20 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     assertNoPrivateText(text)
   })
 })
+  it('forbids normal DNS create when dns_mode_enabled is false', async () => {
+    const { db, env } = await setup()
+    await db.prepare('UPDATE settings SET dns_mode_enabled = 0 WHERE id = ?').bind('default').run()
+    const headers = await adminHeaders(db, env)
+    const response = await postJson(env, '/api/create-dns', {
+      mode: 'dns',
+      subdomain: 'www',
+      rootDomain: 'example.test',
+      recordType: 'A',
+      serverAddress: '198.51.100.20',
+      proxied: true
+    }, headers)
+    const body = await response.json()
+    expect(response.status).toBe(403)
+    expect(body.message).toContain('普通 DNS 模式已关闭')
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM dns_record WHERE host_name = ?').bind('www.example.test').first()).toEqual({ count: 0 })
+  })

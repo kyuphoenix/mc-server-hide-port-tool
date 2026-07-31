@@ -13,7 +13,10 @@ import {
   markRecordSyncError,
   persistRecordRemoteIds,
   resolveMinSubdomainLength,
-  resolveUserRecordLimit
+  resolveUserRecordLimit,
+  updateRecordRemark,
+  type DnsRecordMode,
+  type DnsTargetType
 } from '../services/dns-records'
 import {
   createDnsRecord,
@@ -23,6 +26,7 @@ import {
   findOccupiedRecords,
   getAllowedDomains,
   getCloudflareApiToken,
+  isValidDnsRecordSubdomain,
   isCloudflareDnsError,
   parseCreateDnsRequest,
   parseUpdateDnsRequest,
@@ -79,6 +83,39 @@ function syncErrorCode(error: unknown, stage: Parameters<typeof toDnsFailureEven
   return toDnsFailureEvent(error, stage).code
 }
 
+function buildTargetRecordBody(input: {
+  type: DnsTargetType
+  name: string
+  content: string
+  port: number
+  proxied: boolean
+  mode: DnsRecordMode
+}) {
+  if (input.type === 'SRV') {
+    return {
+      type: 'SRV' as const,
+      name: input.name,
+      ttl: 1 as const,
+      data: { priority: 0, weight: 5, port: input.port, target: input.content }
+    }
+  }
+  if (input.type === 'TXT') {
+    return {
+      type: 'TXT' as const,
+      name: input.name,
+      content: input.content,
+      ttl: 1 as const
+    }
+  }
+  return {
+    type: input.type,
+    name: input.name,
+    content: input.content,
+    ttl: 1 as const,
+    proxied: input.mode === 'dns' ? input.proxied : false
+  }
+}
+
 export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/api/domains', async (c) => {
     const domains = getAllowedDomains(c.env)
@@ -99,7 +136,8 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       min_subdomain_length: minSubdomainLength,
       record_limit: recordLimit,
       record_count: recordCount,
-      max_records_per_user: settings.max_records_per_user
+      max_records_per_user: settings.max_records_per_user,
+      dns_mode_enabled: settings.dns_mode_enabled
     })
   })
 
@@ -127,14 +165,26 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         return c.json({ success: false, message: request.message }, 400)
       }
 
-      const { subdomain, rootDomain, serverAddress, port, targetRecordType } = request.value
+      const {
+        subdomain,
+        rootDomain,
+        server_address: serverAddress,
+        port,
+        target_type: targetRecordType,
+        record_mode: recordMode,
+        proxied,
+        remark
+      } = request.value
+      const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
+      if (recordMode === 'dns' && !settings.dns_mode_enabled) {
+        return c.json({ success: false, message: '普通 DNS 模式已关闭，暂时只能创建 MC 模式记录' }, 403)
+      }
       const token = getCloudflareApiToken(c.env, rootDomain)
       if (!token) {
         logDnsExternalServiceFailure({ code: 'DNS_CONFIG_MISSING', stage: 'config' })
         return c.json({ success: false, message: DNS_CONFIG_SAFE_MESSAGE }, 500)
       }
 
-      const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
       const minLen = resolveMinSubdomainLength(userRow, settings.min_subdomain_length)
       const subdomainInput = String((body as Record<string, unknown>).subdomain ?? '').trim()
       if (minLen > 0 && subdomainInput.length < minLen) {
@@ -169,8 +219,11 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       if (row) {
         const canResume = row.user_id === userId && row.sync_status !== 'active' &&
           row.pending_server_address === null && row.pending_port === null &&
-          row.pending_target_type === null && row.server_address === serverAddress &&
-          Number(row.port) === port && row.target_type === targetRecordType
+          row.pending_target_type === null && row.pending_record_mode === null &&
+          row.pending_proxied === null && row.pending_remark === null && row.server_address === serverAddress &&
+          Number(row.port) === port && row.target_type === targetRecordType &&
+          row.record_mode === recordMode && !!row.proxied === proxied &&
+          String(row.remark ?? '') === remark
         if (!canResume) {
           return c.json(
             {
@@ -190,7 +243,10 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
             host_name: hostName,
             server_address: serverAddress,
             port,
-            target_type: targetRecordType
+            target_type: targetRecordType,
+            record_mode: recordMode,
+            proxied,
+            remark
           })
           isNewReservation = true
         } catch (error) {
@@ -208,7 +264,8 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
 
       try {
         const zoneId = await fetchZoneId(token, rootDomain)
-        const occupiedRecords = await findOccupiedRecords(token, zoneId, [hostName, srvName])
+        const lookupNames = recordMode === 'mc' ? [hostName, srvName] : [hostName]
+        const occupiedRecords = await findOccupiedRecords(token, zoneId, lookupNames)
         if (isNewReservation && occupiedRecords.length > 0) {
           await deleteRecordRow(c.env.DB, row.id)
           return c.json({
@@ -219,13 +276,14 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         }
 
         let targetRecord = remoteRecordByNameAndType(occupiedRecords, hostName, targetRecordType)
-        const targetBody = {
+        const targetBody = buildTargetRecordBody({
           type: targetRecordType,
           name: hostName,
           content: serverAddress,
-          ttl: 1 as const,
-          proxied: false as const
-        }
+          port,
+          proxied,
+          mode: recordMode
+        })
         if (targetRecord && !isNewReservation) {
           targetRecord = await updateDnsRecord(token, zoneId, targetRecord.id, targetBody)
         } else if (!targetRecord && !isNewReservation && row.target_record_id) {
@@ -240,26 +298,29 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         }
         await persistRecordRemoteIds(c.env.DB, row.id, { target_record_id: targetRecord.id })
 
-        let srvRecord = remoteRecordByNameAndType(occupiedRecords, srvName, 'SRV')
-        const srvBody = {
-          type: 'SRV' as const,
-          name: srvName,
-          ttl: 1 as const,
-          data: { priority: 0, weight: 5, port, target: hostName }
-        }
-        if (srvRecord && !isNewReservation) {
-          srvRecord = await updateDnsRecord(token, zoneId, srvRecord.id, srvBody)
-        } else if (!srvRecord && !isNewReservation && row.srv_record_id) {
-          try {
-            srvRecord = await updateDnsRecord(token, zoneId, row.srv_record_id, srvBody)
-          } catch (error) {
-            if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+        let srvRecord = null
+        if (recordMode === 'mc') {
+          srvRecord = remoteRecordByNameAndType(occupiedRecords, srvName, 'SRV')
+          const srvBody = {
+            type: 'SRV' as const,
+            name: srvName,
+            ttl: 1 as const,
+            data: { priority: 0, weight: 5, port, target: hostName }
           }
+          if (srvRecord && !isNewReservation) {
+            srvRecord = await updateDnsRecord(token, zoneId, srvRecord.id, srvBody)
+          } else if (!srvRecord && !isNewReservation && row.srv_record_id) {
+            try {
+              srvRecord = await updateDnsRecord(token, zoneId, row.srv_record_id, srvBody)
+            } catch (error) {
+              if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+            }
+          }
+          if (!srvRecord) {
+            srvRecord = await createDnsRecord(token, zoneId, srvBody)
+          }
+          await persistRecordRemoteIds(c.env.DB, row.id, { srv_record_id: srvRecord.id })
         }
-        if (!srvRecord) {
-          srvRecord = await createDnsRecord(token, zoneId, srvBody)
-        }
-        await persistRecordRemoteIds(c.env.DB, row.id, { srv_record_id: srvRecord.id })
         row = (await finalizeRecordSync(c.env.DB, row.id))!
 
         // Re-check after reservation so concurrent creates cannot exceed the user limit.
@@ -282,8 +343,7 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
             hostName +
             ' -> ' +
             serverAddress +
-            '，Minecraft Java 端口 ' +
-            port,
+            (recordMode === 'mc' ? '，Minecraft Java 端口 ' + port : '，类型 ' + targetRecordType),
           record: row,
           record_count: currentCount,
           record_limit: userRecordLimit,
@@ -356,21 +416,54 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         return c.json({ success: false, message: request.message }, 400)
       }
 
-      const { serverAddress, port, targetRecordType } = request.value
+      const {
+        server_address: serverAddress,
+        port,
+        target_type: targetRecordType,
+        record_mode: recordMode,
+        proxied,
+        remark
+      } = request.value
       if (targetRecordType === 'CNAME' && serverAddress === record.host_name) {
         return c.json({ success: false, message: '目标域名不能和要创建的域名相同' }, 400)
       }
+      if (!isValidDnsRecordSubdomain(record.subdomain, request.value)) {
+        const message = targetRecordType === 'SRV'
+          ? 'SRV 子域名格式不正确，例如 _sip._tcp.voice'
+          : targetRecordType === 'TXT'
+            ? 'TXT 子域名格式不正确，例如 _acme-challenge 或 selector1._domainkey'
+            : '子域名格式不正确，只能使用普通域名标签，例如 play 或 mc.play'
+        return c.json({ success: false, message }, 400)
+      }
+      if (recordMode === 'dns' && record.record_mode !== 'dns') {
+        const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
+        if (!settings.dns_mode_enabled) {
+          return c.json({ success: false, message: '普通 DNS 模式已关闭，无法切换为普通模式记录' }, 403)
+        }
+      }
 
-      if (
+      const dnsFieldsUnchanged =
         record.sync_status === 'active' &&
         record.server_address === serverAddress &&
         Number(record.port) === port &&
-        record.target_type === targetRecordType
-      ) {
+        record.target_type === targetRecordType &&
+        record.record_mode === recordMode &&
+        !!record.proxied === proxied
+
+      if (dnsFieldsUnchanged && String(record.remark ?? '') === remark) {
         return c.json({
           success: true,
           message: '记录未变化',
           record
+        })
+      }
+
+      if (dnsFieldsUnchanged) {
+        const updated = await updateRecordRemark(c.env.DB, record.id, remark)
+        return c.json({
+          success: true,
+          message: '备注已更新',
+          record: updated
         })
       }
 
@@ -385,7 +478,10 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       const syncingRecord = await beginRecordUpdate(c.env.DB, record.id, {
         server_address: serverAddress,
         port,
-        target_type: targetRecordType
+        target_type: targetRecordType,
+        record_mode: recordMode,
+        proxied,
+        remark
       })
       if (!syncingRecord) {
         return c.json({ success: false, message: '记录不存在' }, 404)
@@ -393,17 +489,21 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
 
       try {
         const zoneId = await fetchZoneId(token, record.root_domain)
-        let occupiedRecords = await findOccupiedRecords(token, zoneId, [hostName, srvName])
+        const lookupNames = recordMode === 'mc' || record.record_mode !== 'dns' || record.srv_record_id
+          ? [hostName, srvName]
+          : [hostName]
+        let occupiedRecords = await findOccupiedRecords(token, zoneId, lookupNames)
         let targetRecord = remoteRecordByNameAndType(occupiedRecords, hostName, targetRecordType)
 
-        if (record.target_type !== targetRecordType && !targetRecord) {
+        if (record.target_type !== targetRecordType) {
           const oldIds = occupiedRecords
             .filter((item) =>
               item.name.toLowerCase().replace(/\.$/, '') === hostName &&
-              ['A', 'AAAA', 'CNAME'].includes(item.type.toUpperCase())
+              ['A', 'AAAA', 'CNAME', 'TXT', 'SRV'].includes(item.type.toUpperCase()) &&
+              item.id !== targetRecord?.id
             )
             .map((item) => item.id)
-          if (record.target_record_id) oldIds.push(record.target_record_id)
+          if (record.target_record_id && record.target_record_id !== targetRecord?.id) oldIds.push(record.target_record_id)
           for (const oldId of [...new Set(oldIds)]) {
             await deleteCloudflareDnsRecord(token, zoneId, oldId)
           }
@@ -411,62 +511,81 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         }
 
         if (targetRecord) {
-          targetRecord = await updateDnsRecord(token, zoneId, targetRecord.id, {
+          targetRecord = await updateDnsRecord(token, zoneId, targetRecord.id, buildTargetRecordBody({
             type: targetRecordType,
             name: hostName,
             content: serverAddress,
-            ttl: 1,
-            proxied: false
-          })
+            port,
+            proxied,
+            mode: recordMode
+          }))
         } else if (record.target_type === targetRecordType && record.target_record_id) {
           try {
-            targetRecord = await updateDnsRecord(token, zoneId, record.target_record_id, {
+            targetRecord = await updateDnsRecord(token, zoneId, record.target_record_id, buildTargetRecordBody({
               type: targetRecordType,
               name: hostName,
               content: serverAddress,
-              ttl: 1,
-              proxied: false
-            })
+              port,
+              proxied,
+              mode: recordMode
+            }))
           } catch (error) {
             if (!isCloudflareDnsError(error) || error.status !== 404) throw error
-            targetRecord = await createDnsRecord(token, zoneId, {
+            targetRecord = await createDnsRecord(token, zoneId, buildTargetRecordBody({
               type: targetRecordType,
               name: hostName,
               content: serverAddress,
-              ttl: 1,
-              proxied: false
-            })
+              port,
+              proxied,
+              mode: recordMode
+            }))
           }
         } else {
-          targetRecord = await createDnsRecord(token, zoneId, {
+          targetRecord = await createDnsRecord(token, zoneId, buildTargetRecordBody({
             type: targetRecordType,
             name: hostName,
             content: serverAddress,
-            ttl: 1,
-            proxied: false
-          })
+            port,
+            proxied,
+            mode: recordMode
+          }))
         }
         await persistRecordRemoteIds(c.env.DB, record.id, { target_record_id: targetRecord.id })
 
-        occupiedRecords = await findOccupiedRecords(token, zoneId, [srvName])
         let srvRecord = remoteRecordByNameAndType(occupiedRecords, srvName, 'SRV')
-        if (srvRecord) {
-          srvRecord = await updateDnsRecord(token, zoneId, srvRecord.id, {
-            type: 'SRV',
-            name: srvName,
-            ttl: 1,
-            data: { priority: 0, weight: 5, port, target: hostName }
-          })
-        } else if (record.srv_record_id) {
-          try {
-            srvRecord = await updateDnsRecord(token, zoneId, record.srv_record_id, {
+        if (recordMode === 'dns') {
+          const oldSrvIds = [srvRecord?.id, record.srv_record_id]
+          for (const oldSrvId of [...new Set(oldSrvIds.filter((id): id is string => Boolean(id)))]) {
+            await deleteCloudflareDnsRecord(token, zoneId, oldSrvId)
+          }
+          await persistRecordRemoteIds(c.env.DB, record.id, { srv_record_id: null })
+          srvRecord = null
+        } else {
+          if (srvRecord) {
+            srvRecord = await updateDnsRecord(token, zoneId, srvRecord.id, {
               type: 'SRV',
               name: srvName,
               ttl: 1,
               data: { priority: 0, weight: 5, port, target: hostName }
             })
-          } catch (error) {
-            if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+          } else if (record.srv_record_id) {
+            try {
+              srvRecord = await updateDnsRecord(token, zoneId, record.srv_record_id, {
+                type: 'SRV',
+                name: srvName,
+                ttl: 1,
+                data: { priority: 0, weight: 5, port, target: hostName }
+              })
+            } catch (error) {
+              if (!isCloudflareDnsError(error) || error.status !== 404) throw error
+              srvRecord = await createDnsRecord(token, zoneId, {
+                type: 'SRV',
+                name: srvName,
+                ttl: 1,
+                data: { priority: 0, weight: 5, port, target: hostName }
+              })
+            }
+          } else {
             srvRecord = await createDnsRecord(token, zoneId, {
               type: 'SRV',
               name: srvName,
@@ -474,25 +593,21 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
               data: { priority: 0, weight: 5, port, target: hostName }
             })
           }
-        } else {
-          srvRecord = await createDnsRecord(token, zoneId, {
-            type: 'SRV',
-            name: srvName,
-            ttl: 1,
-            data: { priority: 0, weight: 5, port, target: hostName }
-          })
+          await persistRecordRemoteIds(c.env.DB, record.id, { srv_record_id: srvRecord.id })
         }
-        await persistRecordRemoteIds(c.env.DB, record.id, { srv_record_id: srvRecord.id })
 
         const updated = await finalizeRecordSync(c.env.DB, record.id, {
           server_address: serverAddress,
           port,
-          target_type: targetRecordType
+          target_type: targetRecordType,
+          record_mode: recordMode,
+          proxied,
+          remark
         })
 
         return c.json({
           success: true,
-          message: 'DNS 记录已更新：' + hostName + ' -> ' + serverAddress + '，端口 ' + port,
+          message: 'DNS 记录已更新：' + hostName + ' -> ' + serverAddress + (recordMode === 'mc' ? '，端口 ' + port : '，类型 ' + targetRecordType),
           record: updated
         })
       } catch (err) {

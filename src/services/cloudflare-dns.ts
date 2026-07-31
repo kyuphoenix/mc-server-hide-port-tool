@@ -1,4 +1,4 @@
-import type { DnsRecordRow } from './dns-records'
+import type { DnsRecordDesired, DnsRecordMode, DnsRecordRow, DnsTargetType } from './dns-records'
 import { ExternalFetchError, fetchWithPolicy, readTextWithLimit } from '../lib/external-fetch'
 import type { SensitiveDataEnvironment } from './sensitive-data'
 import { deleteRecordRow } from './dns-records'
@@ -41,6 +41,7 @@ type CloudflareDnsRecord = {
   type: string
   name: string
   content?: string
+  proxied?: boolean
 }
 
 export class CloudflareDnsError extends Error {
@@ -97,7 +98,13 @@ type DnsRecordBody =
       name: string
       content: string
       ttl: 1
-      proxied: false
+      proxied: boolean
+    }
+  | {
+      type: 'TXT'
+      name: string
+      content: string
+      ttl: 1
     }
   | {
       type: 'SRV'
@@ -124,20 +131,21 @@ export async function deleteRecordAndCloudflare(
   }
 
   const zoneId = await fetchZoneId(token, record.root_domain)
+  const isMcRecord = record.record_mode !== 'dns'
   const srvName = `_minecraft._tcp.${record.host_name}`
-  const discovered = await findOccupiedRecords(token, zoneId, [record.host_name, srvName])
+  const discovered = await findOccupiedRecords(token, zoneId, isMcRecord ? [record.host_name, srvName] : [record.host_name])
   const discoveredIds = discovered
     .filter((item) => {
       const name = item.name.toLowerCase().replace(/\.$/, '')
       const type = item.type.toUpperCase()
       return (
-        (name === record.host_name && ['A', 'AAAA', 'CNAME'].includes(type)) ||
-        (name === srvName && type === 'SRV')
+        (name === record.host_name && ['A', 'AAAA', 'CNAME', 'TXT', 'SRV'].includes(type)) ||
+        (isMcRecord && name === srvName && type === 'SRV')
       )
     })
     .map((item) => item.id)
 
-  const recordIds = [record.target_record_id, record.srv_record_id, ...discoveredIds]
+  const recordIds = [record.target_record_id, ...(isMcRecord || record.srv_record_id ? [record.srv_record_id] : []), ...discoveredIds]
   const uniqueIds = [...new Set(recordIds.filter((id): id is string => Boolean(id)))]
   await Promise.all(uniqueIds.map((id) => deleteCloudflareDnsRecord(token, zoneId, id)))
 
@@ -269,12 +277,9 @@ export function parseCreateDnsRequest(
 ):
   | {
       ok: true
-      value: {
+      value: DnsRecordDesired & {
         subdomain: string
         rootDomain: string
-        serverAddress: string
-        port: number
-        targetRecordType: 'A' | 'AAAA' | 'CNAME'
       }
     }
   | { ok: false; message: string } {
@@ -285,14 +290,7 @@ export function parseCreateDnsRequest(
   const data = body as Record<string, unknown>
   const subdomain = normalizeDomain(String(data.subdomain ?? ''))
   const rootDomain = normalizeDomain(String(data.rootDomain ?? ''))
-  const rawServerAddress = String(data.serverAddress ?? data.ip ?? '').trim()
-  const serverAddress = normalizeServerAddress(rawServerAddress)
-  const port = parsePort(data.port)
-  const targetRecordType = getTargetRecordType(serverAddress)
-
-  if (!isValidSubdomain(subdomain)) {
-    return { ok: false, message: '子域名格式不正确，只能使用普通域名标签，例如 play 或 mc.play' }
-  }
+  const desired = parseDesiredDnsRecord(data, parseRecordMode(data.mode ?? data.recordMode))
 
   if (!domains.includes(rootDomain)) {
     return { ok: false, message: '根域名不在后端允许列表中' }
@@ -302,16 +300,21 @@ export function parseCreateDnsRequest(
     return { ok: false, message: '子域名只需要填写前缀部分，例如 play，不要填写完整根域名' }
   }
 
-  if (!targetRecordType) {
-    return { ok: false, message: '服务器地址必须是合法的 IPv4、IPv6 或域名' }
+  if (!desired.ok) {
+    return desired
   }
 
-  if (targetRecordType === 'CNAME' && serverAddress === `${subdomain}.${rootDomain}`) {
+  if (!isValidDnsRecordSubdomain(subdomain, desired.value)) {
+    const message = desired.value.target_type === 'SRV'
+      ? 'SRV 子域名格式不正确，例如 _sip._tcp.voice'
+      : desired.value.target_type === 'TXT'
+        ? 'TXT 子域名格式不正确，例如 _acme-challenge 或 selector1._domainkey'
+        : '子域名格式不正确，只能使用普通域名标签，例如 play 或 mc.play'
+    return { ok: false, message }
+  }
+
+  if (desired.value.target_type === 'CNAME' && desired.value.server_address === `${subdomain}.${rootDomain}`) {
     return { ok: false, message: '目标域名不能和要创建的域名相同' }
-  }
-
-  if (!port) {
-    return { ok: false, message: '端口必须是 1 到 65535 之间的整数' }
   }
 
   return {
@@ -319,11 +322,105 @@ export function parseCreateDnsRequest(
     value: {
       subdomain,
       rootDomain,
-      serverAddress,
-      port,
-      targetRecordType
+      ...desired.value
     }
   }
+}
+
+function parseRecordMode(value: unknown): DnsRecordMode {
+  const mode = String(value ?? '').trim().toLowerCase()
+  return mode === 'dns' ? 'dns' : 'mc'
+}
+
+function parseDnsTargetType(value: unknown): DnsTargetType | null {
+  const type = String(value ?? '').trim().toUpperCase()
+  return type === 'A' || type === 'AAAA' || type === 'CNAME' || type === 'TXT' || type === 'SRV'
+    ? type
+    : null
+}
+
+function parseBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true
+  const text = String(value ?? '').trim().toLowerCase()
+  return text === 'true' || text === '1' || text === 'on' || text === 'yes'
+}
+
+function parseDesiredDnsRecord(
+  data: Record<string, unknown>,
+  recordMode: DnsRecordMode
+): { ok: true; value: DnsRecordDesired } | { ok: false; message: string } {
+  const rawServerAddress = String(data.serverAddress ?? data.content ?? data.ip ?? '').trim()
+  const remark = normalizeRemark(data.remark ?? data.note)
+
+  if (recordMode === 'mc') {
+    const serverAddress = normalizeServerAddress(rawServerAddress)
+    const targetRecordType = getTargetRecordType(serverAddress)
+    const port = parsePort(data.port)
+    if (!targetRecordType) {
+      return { ok: false, message: '服务器地址必须是合法的 IPv4、IPv6 或域名' }
+    }
+    if (!port) {
+      return { ok: false, message: '端口必须是 1 到 65535 之间的整数' }
+    }
+    return {
+      ok: true,
+      value: {
+        server_address: serverAddress,
+        port,
+        target_type: targetRecordType,
+        record_mode: 'mc',
+        proxied: false,
+        remark
+      }
+    }
+  }
+
+  const targetRecordType = parseDnsTargetType(data.recordType ?? data.targetType ?? data.type)
+  if (!targetRecordType) {
+    return { ok: false, message: '记录类型必须是 A、AAAA、CNAME、TXT 或 SRV' }
+  }
+
+  const serverAddress = targetRecordType === 'TXT'
+    ? normalizeTxtContent(rawServerAddress)
+    : normalizeServerAddress(rawServerAddress)
+  const contentError = validateRecordContent(targetRecordType, serverAddress)
+  if (contentError) return { ok: false, message: contentError }
+  let port = 0
+  if (targetRecordType === 'SRV') {
+    const parsedPort = parsePort(data.port)
+    if (!parsedPort) {
+      return { ok: false, message: 'SRV 端口必须是 1 到 65535 之间的整数' }
+    }
+    port = parsedPort
+  }
+
+  return {
+    ok: true,
+    value: {
+      server_address: serverAddress,
+      port,
+      target_type: targetRecordType,
+      record_mode: 'dns',
+      proxied: ['A', 'AAAA', 'CNAME'].includes(targetRecordType) && parseBoolean(data.proxied),
+      remark
+    }
+  }
+}
+
+function validateRecordContent(type: DnsTargetType, value: string): string | null {
+  if (type === 'A') return isIPv4(value) ? null : 'A 记录内容必须是合法 IPv4 地址'
+  if (type === 'AAAA') return isIPv6(value) ? null : 'AAAA 记录内容必须是合法 IPv6 地址'
+  if (type === 'CNAME') return isValidHostname(value) ? null : 'CNAME 记录内容必须是合法域名'
+  if (type === 'SRV') return isValidHostname(value) ? null : 'SRV 目标必须是合法域名'
+  return value.length > 0 && value.length <= 2048 ? null : 'TXT 记录内容不能为空，且不能超过 2048 个字符'
+}
+
+function normalizeRemark(value: unknown): string {
+  return String(value ?? '').trim().slice(0, 200)
+}
+
+function normalizeTxtContent(value: string): string {
+  return value.trim().slice(0, 2048)
 }
 
 function parsePort(value: unknown): number | null {
@@ -340,7 +437,7 @@ function normalizeServerAddress(value: string): string {
   return isIPv6(value) ? value : normalizeDomain(value)
 }
 
-function getTargetRecordType(value: string): 'A' | 'AAAA' | 'CNAME' | null {
+function getTargetRecordType(value: string): DnsTargetType | null {
   if (isIPv4(value)) {
     return 'A'
   }
@@ -392,6 +489,34 @@ function isValidSubdomain(value: string): boolean {
   }
 
   return value.split('.').every(isValidDomainLabel)
+}
+
+export function isValidDnsRecordSubdomain(value: string, desired: DnsRecordDesired): boolean {
+  if (desired.record_mode === 'dns' && desired.target_type === 'SRV') {
+    return isValidSrvSubdomain(value)
+  }
+  if (desired.record_mode === 'dns' && desired.target_type === 'TXT') {
+    return isValidTxtSubdomain(value)
+  }
+  return isValidSubdomain(value)
+}
+
+function isValidTxtSubdomain(value: string): boolean {
+  if (!value || value.length > 253 || value.includes('..')) return false
+  return value.split('.').every((label) => /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/.test(label))
+}
+
+function isValidSrvSubdomain(value: string): boolean {
+  if (!value || value.length > 253 || value.includes('..')) return false
+  const labels = value.split('.')
+  if (labels.length < 3) return false
+  if (!isValidSrvServiceLabel(labels[0])) return false
+  if (labels[1] !== '_tcp' && labels[1] !== '_udp') return false
+  return labels.slice(2).every(isValidDomainLabel)
+}
+
+function isValidSrvServiceLabel(value: string): boolean {
+  return /^_[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)
 }
 
 function isValidHostname(value: string): boolean {
@@ -471,11 +596,7 @@ export function parseUpdateDnsRequest(
 ):
   | {
       ok: true
-      value: {
-        serverAddress: string
-        port: number
-        targetRecordType: 'A' | 'AAAA' | 'CNAME'
-      }
+      value: DnsRecordDesired
     }
   | { ok: false; message: string } {
   if (!body || typeof body !== 'object') {
@@ -483,27 +604,7 @@ export function parseUpdateDnsRequest(
   }
 
   const data = body as Record<string, unknown>
-  const rawServerAddress = String(data.serverAddress ?? data.ip ?? '').trim()
-  const serverAddress = normalizeServerAddress(rawServerAddress)
-  const port = parsePort(data.port)
-  const targetRecordType = getTargetRecordType(serverAddress)
-
-  if (!targetRecordType) {
-    return { ok: false, message: '服务器地址必须是合法的 IPv4、IPv6 或域名' }
-  }
-
-  if (!port) {
-    return { ok: false, message: '端口必须是 1 到 65535 之间的整数' }
-  }
-
-  return {
-    ok: true,
-    value: {
-      serverAddress,
-      port,
-      targetRecordType
-    }
-  }
+  return parseDesiredDnsRecord(data, parseRecordMode(data.mode ?? data.recordMode))
 }
 
 export async function createDnsRecord(

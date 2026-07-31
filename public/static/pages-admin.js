@@ -73,6 +73,23 @@ function renderSettingsTab(data) {
     <form id="admin-settings-form" class="space-y-6">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div class="space-y-5">
+          <div class="bg-slate-950 p-4 rounded-md border border-emerald-500/15">
+            <h4 class="text-xs font-semibold uppercase tracking-wider text-emerald-400 mb-3">网站设置</h4>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">主页标签栏标题</label>
+                <input type="text" name="site_page_title" value="${escapeAttr(s.site_page_title || '')}" maxlength="80" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
+                <p class="mt-1 text-[11px] text-slate-500">显示在浏览器标签页的标题。留空则使用默认名称。</p>
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">主页左上角名称</label>
+                <input type="text" name="site_header_name" value="${escapeAttr(s.site_header_name || '')}" maxlength="40" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
+                <p class="mt-1 text-[11px] text-slate-500">显示在主页左上角的站点名称。留空则使用默认名称。</p>
+              </div>
+              <label class="flex items-center gap-3"><input type="checkbox" name="dns_mode_enabled" ${s.dns_mode_enabled ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700" /><span class="text-sm font-medium text-slate-200">启用普通 DNS 模式</span></label>
+              <p class="text-[11px] text-slate-500 leading-4">关闭后用户只能创建 MC 模式记录；已经存在的普通 DNS 记录仍可修改和删除。</p>
+            </div>
+          </div>
           <label class="flex items-center gap-3 bg-slate-950 p-4 rounded-md border border-slate-800"><input type="checkbox" name="registration_enabled" ${s.registration_enabled ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700" /><span class="text-sm font-medium text-slate-200">开启开放注册</span></label>
           <div>
             <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">注册通道模式</label>
@@ -478,16 +495,19 @@ function renderDnsTab(data) {
         <table class="w-full text-sm text-left border-collapse">
           <thead class="bg-slate-900/50">
             <tr class="border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              <th class="py-3 px-4">主机名</th><th class="py-3 px-4">目标服务器</th><th class="py-3 px-4">端口</th><th class="py-3 px-4">类型</th><th class="py-3 px-4">所有者 ID</th><th class="py-3 px-4">创建时间</th><th class="py-3 px-4 text-right">操作</th>
+              <th class="py-3 px-4">主机名</th><th class="py-3 px-4">模式</th><th class="py-3 px-4">记录内容</th><th class="py-3 px-4">端口</th><th class="py-3 px-4">类型</th><th class="py-3 px-4">代理</th><th class="py-3 px-4">备注</th><th class="py-3 px-4">所有者 ID</th><th class="py-3 px-4">创建时间</th><th class="py-3 px-4 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-800/60">
-            ${records.length === 0 ? '<tr><td colspan="7" class="py-12 text-center text-slate-500">目前系统里没有任何 DNS 解析记录</td></tr>' : records.map((r) => `
+            ${records.length === 0 ? '<tr><td colspan="10" class="py-12 text-center text-slate-500">目前系统里没有任何 DNS 解析记录</td></tr>' : records.map((r) => `
               <tr class="hover:bg-slate-900/40 transition">
                 <td class="py-3 px-4 font-mono-custom text-emerald-400 break-all">${escapeHtml(r.host_name)}</td>
+                <td class="py-3 px-4 text-slate-300 text-xs">${escapeHtml(r.record_mode === 'dns' ? '普通 DNS' : 'MC 模式')}</td>
                 <td class="py-3 px-4 font-mono-custom text-slate-300 break-all">${escapeHtml(r.server_address)}</td>
-                <td class="py-3 px-4 font-mono-custom text-slate-300">${escapeHtml(String(r.port))}</td>
+                <td class="py-3 px-4 font-mono-custom text-slate-300">${escapeHtml(r.record_mode === 'mc' || r.target_type === 'SRV' ? String(r.port || '') : '-')}</td>
                 <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-[10px] font-bold font-mono-custom bg-slate-800 text-slate-300">${escapeHtml(r.target_type)}</span></td>
+                <td class="py-3 px-4 text-slate-300 text-xs">${escapeHtml(r.record_mode === 'dns' && ['A', 'AAAA', 'CNAME'].includes(r.target_type) ? (Number(r.proxied || 0) > 0 ? '小黄云' : 'DNS only') : '-')}</td>
+                <td class="py-3 px-4 text-slate-300 text-xs break-all">${r.remark ? escapeHtml(r.remark) : '<span class="text-slate-600">-</span>'}</td>
                 <td class="py-3 px-4 font-mono-custom text-slate-400 text-xs">${escapeHtml(r.user_id || '系统')}</td>
                 <td class="py-3 px-4 text-slate-400 text-[11px]">${escapeHtml(formatDate(r.created_at))}</td>
                 <td class="py-3 px-4 text-right"><button type="button" data-dns-delete="${escapeAttr(r.id)}" class="px-2.5 py-1 text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-md transition">强制删除</button></td>
@@ -732,6 +752,9 @@ function bindEvents() {
     e.preventDefault();
     const obj = formToObject(e.currentTarget);
     const payload = {
+      site_page_title: String(obj.site_page_title || ''),
+      site_header_name: String(obj.site_header_name || ''),
+      dns_mode_enabled: !!obj.dns_mode_enabled,
       registration_enabled: !!obj.registration_enabled,
       registration_mode: String(obj.registration_mode || 'email'),
       invite_required: !!obj.invite_required,

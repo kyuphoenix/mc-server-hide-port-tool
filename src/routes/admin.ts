@@ -142,6 +142,9 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const resend_accounts = buildResendAccounts(body, current)
 
     const patch: Partial<Settings> = {
+      site_page_title: String(body.site_page_title ?? ''),
+      site_header_name: String(body.site_header_name ?? ''),
+      dns_mode_enabled: asBool(body.dns_mode_enabled),
       registration_enabled: asBool(body.registration_enabled),
       registration_mode: modeNorm,
       invite_required: asBool(body.invite_required),
