@@ -119,6 +119,7 @@ describe('production route hardening', () => {
 
   it.each([
     ['/api/admin/settings', {}],
+    ['/api/admin/website-settings', {}],
     ['/api/admin/oauth/create', {}],
     ['/api/admin/oauth/provider-id/update', {}],
     ['/api/admin/oauth/provider-id/toggle', { enabled: true }],
@@ -135,6 +136,35 @@ describe('production route hardening', () => {
     const response = await postJson(env, path, body, headers)
     expect(response.status).toBe(403)
   })
+  it('saves website settings without changing global settings', async () => {
+    const { db, env } = await setup()
+    await db.prepare(
+      "UPDATE settings SET site_page_title = 'Old Title', site_header_name = 'Old Header', dns_mode_enabled = 1, registration_enabled = 0 WHERE id = 'default'"
+    ).run()
+    const headers = await createAdminSession(db, env, {
+      id: 'super-admin-website',
+      email: 'super-admin-website@example.test',
+      superAdmin: true
+    })
+
+    const response = await postJson(env, '/api/admin/website-settings', {
+      site_page_title: 'New Title',
+      site_header_name: 'New Header',
+      dns_mode_enabled: false
+    }, headers)
+    expect(response.status).toBe(200)
+
+    const row = await db.prepare(
+      "SELECT site_page_title, site_header_name, dns_mode_enabled, registration_enabled, registration_mode, invite_required FROM settings WHERE id = 'default'"
+    ).first()
+    expect(row?.site_page_title).toBe('New Title')
+    expect(row?.site_header_name).toBe('New Header')
+    expect(row?.dns_mode_enabled).toBe(0)
+    expect(row?.registration_enabled).toBe(0)
+    expect(row?.registration_mode).toBe('email')
+    expect(row?.invite_required).toBe(0)
+  })
+
 
   it('does not expose Better Auth errors when an admin creates a duplicate user', async () => {
     const { db, env } = await setup()

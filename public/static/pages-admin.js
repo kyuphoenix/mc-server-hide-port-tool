@@ -46,6 +46,7 @@ function renderSidebar(tab) {
       <div class="p-4 md:p-6 md:pt-0 flex-1">
         <nav class="space-y-1">
           <a href="/admin?tab=settings" data-tab-link="settings" class="${tabClass(tab, 'settings')}">全局设置</a>
+          <a href="/admin?tab=website" data-tab-link="website" class="${tabClass(tab, 'website')}">网站设置</a>
           <a href="/admin?tab=announcement" data-tab-link="announcement" class="${tabClass(tab, 'announcement')}">公告设置</a>
           <a href="/admin?tab=oauth" data-tab-link="oauth" class="${tabClass(tab, 'oauth')}">OAuth 应用</a>
           <a href="/admin?tab=invites" data-tab-link="invites" class="${tabClass(tab, 'invites')}">邀请码</a>
@@ -73,23 +74,6 @@ function renderSettingsTab(data) {
     <form id="admin-settings-form" class="space-y-6">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div class="space-y-5">
-          <div class="bg-slate-950 p-4 rounded-md border border-emerald-500/15">
-            <h4 class="text-xs font-semibold uppercase tracking-wider text-emerald-400 mb-3">网站设置</h4>
-            <div class="space-y-3">
-              <div>
-                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">主页标签栏标题</label>
-                <input type="text" name="site_page_title" value="${escapeAttr(s.site_page_title || '')}" maxlength="80" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
-                <p class="mt-1 text-[11px] text-slate-500">显示在浏览器标签页的标题。留空则使用默认名称。</p>
-              </div>
-              <div>
-                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">主页左上角名称</label>
-                <input type="text" name="site_header_name" value="${escapeAttr(s.site_header_name || '')}" maxlength="40" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
-                <p class="mt-1 text-[11px] text-slate-500">显示在主页左上角的站点名称。留空则使用默认名称。</p>
-              </div>
-              <label class="flex items-center gap-3"><input type="checkbox" name="dns_mode_enabled" ${s.dns_mode_enabled ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700" /><span class="text-sm font-medium text-slate-200">启用普通 DNS 模式</span></label>
-              <p class="text-[11px] text-slate-500 leading-4">关闭后用户只能创建 MC 模式记录；已经存在的普通 DNS 记录仍可修改和删除。</p>
-            </div>
-          </div>
           <label class="flex items-center gap-3 bg-slate-950 p-4 rounded-md border border-slate-800"><input type="checkbox" name="registration_enabled" ${s.registration_enabled ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700" /><span class="text-sm font-medium text-slate-200">开启开放注册</span></label>
           <div>
             <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">注册通道模式</label>
@@ -193,6 +177,37 @@ function renderSettingsTab(data) {
   </div>`;
 }
 
+
+function renderWebsiteTab(data) {
+  const s = data.settings;
+  return `
+  <section class="bg-slate-900/40 border border-slate-800 rounded-lg p-6 sm:p-8">
+    <div id="website-settings-alert">${alertBox('error', data.websiteError)}${alertBox('info', data.websiteInfo)}</div>
+    <h3 class="text-lg font-bold text-white mb-6 pb-3 border-b border-slate-800">网站设置</h3>
+    <form id="admin-website-form" class="space-y-6">
+      <div class="bg-slate-950 p-5 rounded-md border border-emerald-500/15 space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">主页标签栏标题</label>
+          <input type="text" name="site_page_title" value="${escapeAttr(s.site_page_title || '')}" maxlength="80" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
+          <p class="mt-1 text-[11px] text-slate-500">显示在浏览器标签页的标题。留空则使用默认名称。</p>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">主页左上角名称</label>
+          <input type="text" name="site_header_name" value="${escapeAttr(s.site_header_name || '')}" maxlength="40" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
+          <p class="mt-1 text-[11px] text-slate-500">显示在主页左上角的站点名称。留空则使用默认名称。</p>
+        </div>
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" name="dns_mode_enabled" ${s.dns_mode_enabled ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700" />
+          <span class="text-sm font-medium text-slate-200">启用普通 DNS 模式</span>
+        </label>
+        <p class="text-[11px] text-slate-500 leading-4">关闭后用户只能创建 MC 模式记录；已经存在的普通 DNS 记录仍可修改和删除。</p>
+      </div>
+      <div class="flex justify-end pt-2">
+        <button type="submit" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md transition">保存网站设置</button>
+      </div>
+    </form>
+  </section>`;
+}
 
 function renderAnnouncementTab(data) {
   const announcement = data.announcement || {
@@ -572,6 +587,7 @@ function renderAll() {
   const tab = state.activeTab || 'settings';
   let body = '';
   if (tab === 'settings') body = renderSettingsTab(state);
+  else if (tab === 'website') body = renderWebsiteTab(state);
   else if (tab === 'announcement') body = renderAnnouncementTab(state);
   else if (tab === 'oauth') body = renderOAuthTab(state);
   else if (tab === 'invites') body = renderInvitesTab(state);
@@ -752,9 +768,6 @@ function bindEvents() {
     e.preventDefault();
     const obj = formToObject(e.currentTarget);
     const payload = {
-      site_page_title: String(obj.site_page_title || ''),
-      site_header_name: String(obj.site_header_name || ''),
-      dns_mode_enabled: !!obj.dns_mode_enabled,
       registration_enabled: !!obj.registration_enabled,
       registration_mode: String(obj.registration_mode || 'email'),
       invite_required: !!obj.invite_required,
@@ -777,6 +790,23 @@ function bindEvents() {
       await loadAdmin('settings', { mailInfo: data.message || '设置已保存' });
     } else {
       await loadAdmin('settings', { mailError: apiMessage(data, '保存失败') });
+    }
+  });
+
+  document.getElementById('admin-website-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const obj = formToObject(e.currentTarget);
+    const payload = {
+      site_page_title: String(obj.site_page_title || ''),
+      site_header_name: String(obj.site_header_name || ''),
+      dns_mode_enabled: !!obj.dns_mode_enabled
+    };
+    const { data } = await apiPost('/api/admin/website-settings', payload);
+    if (data?.success) {
+      showToast(data.message || '网站设置已保存', 'success');
+      await loadAdmin('website', { websiteInfo: data.message || '网站设置已保存' });
+    } else {
+      await loadAdmin('website', { websiteError: apiMessage(data, '保存失败') });
     }
   });
 

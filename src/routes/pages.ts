@@ -15,7 +15,7 @@ import type { Bindings } from '../services/cloudflare-dns'
 import { sensitiveDataKeysFromEnv } from '../services/sensitive-data'
 import { getAnnouncement } from '../services/announcement'
 
-type AdminTab = 'settings' | 'announcement' | 'oauth' | 'invites' | 'users' | 'dns'
+type AdminTab = 'settings' | 'website' | 'announcement' | 'oauth' | 'invites' | 'users' | 'dns'
 
 async function firstSetupIsCompleted(db: D1Database): Promise<boolean> {
   return (await reconcileFirstSetup(db)).status === 'completed'
@@ -23,7 +23,7 @@ async function firstSetupIsCompleted(db: D1Database): Promise<boolean> {
 
 function parseAdminTab(raw: string | undefined | null): AdminTab {
   const v = String(raw ?? '').trim().toLowerCase()
-  if (v === 'announcement' || v === 'oauth' || v === 'invites' || v === 'users' || v === 'dns' || v === 'settings') return v
+  if (v === 'announcement' || v === 'oauth' || v === 'invites' || v === 'users' || v === 'dns' || v === 'settings' || v === 'website') return v
   return 'settings'
 }
 

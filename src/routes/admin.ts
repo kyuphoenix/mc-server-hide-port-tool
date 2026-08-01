@@ -124,6 +124,23 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     }
   })
 
+  app.post('/api/admin/website-settings', async (c) => {
+    const denied = await requireJsonMutation(c)
+    if (denied) return denied
+    const admin = await requireAdmin(c.env, c.req.raw.headers)
+    if (!admin) return apiErr(c, '无权限', 403)
+    if (!isSuperAdminUser(admin)) return apiErr(c, '仅超级管理员可修改系统设置', 403)
+
+    const body = await readJsonBody(c)
+    const patch: Partial<Settings> = {
+      site_page_title: String(body.site_page_title ?? ''),
+      site_header_name: String(body.site_header_name ?? ''),
+      dns_mode_enabled: asBool(body.dns_mode_enabled)
+    }
+    await updateSettings(c.env.DB, patch, sensitiveDataKeysFromEnv(c.env))
+    return apiOk(c, undefined, { message: '网站设置已保存' })
+  })
+
   app.post('/api/admin/settings', async (c) => {
     const denied = await requireJsonMutation(c)
     if (denied) return denied
