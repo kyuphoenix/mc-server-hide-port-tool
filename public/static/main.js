@@ -86,6 +86,8 @@ function initHomeDns() {
   }
 
   const recordModeSelect = getRecordModeSelect();
+  const initialDnsMode = recordModeSelect ? recordModeSelect.getAttribute('data-dns-mode-enabled') : null;
+  if (initialDnsMode !== null) domainMeta.dnsModeEnabled = initialDnsMode !== '0';
   if (recordModeSelect && !recordModeSelect.dataset.bound) {
     recordModeSelect.dataset.bound = '1';
     recordModeSelect.addEventListener('change', refreshModeFields);

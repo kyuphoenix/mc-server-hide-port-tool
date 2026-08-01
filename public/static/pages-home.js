@@ -45,6 +45,7 @@ function renderRecordRow(r) {
 function renderHome(data) {
   const user = data.user;
   const records = data.records || [];
+  const dnsModeEnabled = !data.settings || data.settings.dns_mode_enabled !== false;
   const siteName = data.settings?.site_header_name || '子域名分发系统';
   const displayName = (user.name || '').trim() || user.email;
   const isAdmin = user.role === 'admin';
@@ -98,11 +99,11 @@ function renderHome(data) {
                   </button>
                   <div id="record-mode-info-panel" role="tooltip" class="hidden group-hover:block absolute left-0 top-full z-30 w-72 pt-2">
                     <div class="rounded-xl border border-slate-700 bg-slate-950/95 backdrop-blur p-3.5 shadow-2xl shadow-black/50 space-y-2.5">
-                      <div id="record-mode-info-dns">
+                      <div id="record-mode-info-dns"${dnsModeEnabled ? '' : ' hidden'}>
                         <div class="text-xs font-semibold text-emerald-400">普通 DNS</div>
                         <p class="mt-1 text-xs leading-relaxed text-slate-300">创建 A / AAAA / CNAME / TXT / SRV 记录，其中 A、AAAA、CNAME 可开启 Cloudflare 代理（小黄云）。</p>
                       </div>
-                      <div id="record-mode-info-mc" class="border-t border-slate-800 pt-2.5">
+                      <div id="record-mode-info-mc"${dnsModeEnabled ? ' class="border-t border-slate-800 pt-2.5"' : ''}>
                         <div class="text-xs font-semibold text-emerald-400">MC 模式</div>
                         <p class="mt-1 text-xs leading-relaxed text-slate-300">创建目标记录的同时自动生成 _minecraft._tcp SRV 记录，Minecraft 客户端连接时无需输入端口。</p>
                       </div>
@@ -110,9 +111,9 @@ function renderHome(data) {
                   </div>
                 </div>
               </div>
-              <select id="record-mode" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition">
-                <option value="dns">普通 DNS</option>
-                <option value="mc">MC 模式</option>
+              <select id="record-mode" data-dns-mode-enabled="${dnsModeEnabled ? '1' : '0'}" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition">
+                <option value="dns"${dnsModeEnabled ? '' : ' hidden disabled'}>${dnsModeEnabled ? '普通 DNS' : '普通 DNS（已关闭）'}</option>
+                <option value="mc"${dnsModeEnabled ? '' : ' selected'}>MC 模式</option>
               </select>
             </div>
             <div>
