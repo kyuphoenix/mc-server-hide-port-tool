@@ -1,10 +1,9 @@
-﻿import { afterEach, describe, expect, it } from 'vitest'
+﻿import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   seedInvite,
   seedUser,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   assertInviteCodeAvailable,
@@ -29,16 +28,13 @@ import {
   releasePendingOAuthRegistrationIntent
 } from '../src/services/oauth-registration-intents'
 
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
 
-async function database(): Promise<D1Database> {
-  const instance = await createTestD1()
-  instances.push(instance)
-  return instance.db
-}
-
-afterEach(async () => {
-  await disposeTestD1Instances(instances)
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
 })
 
 async function insertIntent(
@@ -70,7 +66,6 @@ async function insertIntent(
 
 describe('0010 OAuth registration intent migration', () => {
   it('adds the intent and invite reservation columns', async () => {
-    const db = await database()
     const intentColumns = await db.prepare(
       `PRAGMA table_info('oauth_registration_intent')`
     ).all<{ name: string }>()
@@ -96,7 +91,6 @@ describe('0010 OAuth registration intent migration', () => {
   })
 
   it('atomically consumes a matching invite when the intent is finalized', async () => {
-    const db = await database()
     const creatorId = await seedUser(db)
     const userId = await seedUser(db, {
       id: '9002',
@@ -139,7 +133,6 @@ describe('0010 OAuth registration intent migration', () => {
   })
 
   it('rejects finalization when the invite reservation no longer matches', async () => {
-    const db = await database()
     const creatorId = await seedUser(db)
     const userId = await seedUser(db, {
       id: '9002',
@@ -161,7 +154,6 @@ describe('0010 OAuth registration intent migration', () => {
   })
 
   it('rejects finalization before authorization', async () => {
-    const db = await database()
     await insertIntent(db, { id: 'intent-pending' })
 
     await expect(
@@ -172,7 +164,6 @@ describe('0010 OAuth registration intent migration', () => {
   })
 
   it('releases only pending reservations when intents are deleted', async () => {
-    const db = await database()
     const creatorId = await seedUser(db)
     const pendingInvite = await seedInvite(db, creatorId, {
       id: 'invite-pending',
@@ -222,7 +213,6 @@ describe('0010 OAuth registration intent migration', () => {
 
 describe('reserved invite compatibility', () => {
   it('blocks availability, ordinary consumption, and revocation while reserved', async () => {
-    const db = await database()
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId)
     await db.prepare(
@@ -246,7 +236,6 @@ describe('reserved invite compatibility', () => {
   })
 
   it('returns reservation fields from create, list, and find operations', async () => {
-    const db = await database()
     const creatorId = await seedUser(db)
     const created = await createInviteCode(db, creatorId, 'FRESH-INVITE')
     expect(created).toMatchObject({
@@ -321,7 +310,6 @@ async function createBoundIntent(
 
 describe('OAuth registration intent lifecycle', () => {
   it('stores only hashes and builds a short-lived secure cookie', async () => {
-    const db = await database()
     const intent = await createOAuthRegistrationIntent(db, {
       providerId: 'fixture',
       inviteRequired: false,
@@ -345,7 +333,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('allows only one concurrent reservation for the same invite', async () => {
-    const db = await database()
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId)
     const results = await Promise.allSettled([
@@ -369,7 +356,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('binds OAuth state exactly once', async () => {
-    const db = await database()
     const intent = await createOAuthRegistrationIntent(db, {
       providerId: 'fixture', inviteRequired: false, inviteCode: ''
     })
@@ -388,7 +374,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('rejects callback mismatches, expiry, replay, policy changes, and lost reservations', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: false })
     const intent = await createBoundIntent(db)
 
@@ -457,7 +442,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('rechecks whether the latest policy requires an invite', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: false })
     const allowed = await createBoundIntent(db, { state: 'invite-free' })
     await authorizeOAuthRegistrationIntent(db, {
@@ -478,7 +462,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('finalizes idempotently and atomically assigns the invite', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const userId = await seedUser(db, {
@@ -518,7 +501,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('releases pending reservations but never directly releases authorized ones', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const pendingInvite = await seedInvite(db, creatorId, {
@@ -559,7 +541,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('counts expired pending intents rather than trigger side effects', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId, {
@@ -579,7 +560,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('reconciles an authorized intent when its user exists', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId)
@@ -605,7 +585,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('quarantines an authorized intent before releasing it after confirmed user absence', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId)
@@ -645,7 +624,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('keeps a stale authorized reservation when a user appears before conditional release', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const invite = await seedInvite(db, creatorId, {
@@ -750,7 +728,6 @@ describe('OAuth registration intent lifecycle', () => {
   })
 
   it('deletes old consumed intents without changing invite ownership', async () => {
-    const db = await database()
     await setOAuthRegistrationPolicy(db, { mode: 'oauth', inviteRequired: true })
     const creatorId = await seedUser(db)
     const userId = await seedUser(db, {

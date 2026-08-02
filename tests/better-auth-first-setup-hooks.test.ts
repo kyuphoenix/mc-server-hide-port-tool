@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAuth, type AuthBindings } from '../src/auth'
 import {
   bindOAuthRegistrationIntentState,
@@ -9,10 +9,9 @@ import {
   getFirstSetupState
 } from '../src/services/first-setup'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   markFirstSetupCompleted,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   AUTH_ORIGIN,
@@ -24,24 +23,31 @@ import {
   setRegistrationPolicy
 } from './helpers/auth'
 
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
 
-afterEach(async () => {
-  vi.restoreAllMocks()
-  await disposeTestD1Instances(instances)
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
 })
 
-async function setupOpen() {
-  const instance = await createTestD1()
-  instances.push(instance)
-  const env: AuthBindings = {
-    DB: instance.db,
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+function makeEnv(): AuthBindings {
+  return {
+    DB: db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
     DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App'
   }
-  return { db: instance.db, env }
+}
+
+async function setupOpen() {
+  return { db, env: makeEnv() }
 }
 
 async function counts(db: D1Database) {

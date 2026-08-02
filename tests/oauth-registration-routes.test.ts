@@ -1,4 +1,4 @@
-﻿import { afterEach, describe, expect, it, vi } from 'vitest'
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { hashPassword } from 'better-auth/crypto'
 import app from '../src/index'
 import { createAuth } from '../src/auth'
@@ -14,12 +14,11 @@ import {
 } from '../src/services/oauth-registration-intents'
 import { claimFirstSetup } from '../src/services/first-setup'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   markFirstSetupCompleted,
   seedInvite,
   seedUser,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   AUTH_ORIGIN,
@@ -31,7 +30,24 @@ import {
   setRegistrationPolicy
 } from './helpers/auth'
 
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
+
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
+})
+
+function makeEnv(): Bindings {
+  return {
+    DB: db,
+    BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
+    BETTER_AUTH_URL: AUTH_ORIGIN,
+    APP_NAME: 'Test App'
+  } as unknown as Bindings
+}
 
 async function setup(
   policy: { enabled: boolean; mode: 'email' | 'oauth' | 'both'; inviteRequired: boolean } = {
@@ -40,46 +56,27 @@ async function setup(
     inviteRequired: false
   }
 ) {
-  const instance = await createTestD1()
-  instances.push(instance)
-  await markFirstSetupCompleted(instance.db)
-  await setRegistrationPolicy(instance.db, policy)
-  await seedFixtureOAuthProvider(instance.db)
-  const env: Bindings = {
-    DB: instance.db,
-    BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
-    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
-    BETTER_AUTH_URL: AUTH_ORIGIN,
-    APP_NAME: 'Test App'
-  } as unknown as Bindings
-  return { db: instance.db, env }
+  await markFirstSetupCompleted(db)
+  await setRegistrationPolicy(db, policy)
+  await seedFixtureOAuthProvider(db)
+  return { db, env: makeEnv() }
 }
 
 async function setupUninitialized(status: 'open' | 'claimed') {
-  const instance = await createTestD1()
-  instances.push(instance)
-  await setRegistrationPolicy(instance.db, {
+  await setRegistrationPolicy(db, {
     enabled: true,
     mode: 'both',
     inviteRequired: false
   })
-  await seedFixtureOAuthProvider(instance.db)
+  await seedFixtureOAuthProvider(db)
   if (status === 'claimed') {
-    await claimFirstSetup(instance.db)
+    await claimFirstSetup(db)
   }
-  const env: Bindings = {
-    DB: instance.db,
-    BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
-    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
-    BETTER_AUTH_URL: AUTH_ORIGIN,
-    APP_NAME: 'Test App'
-  } as unknown as Bindings
-  return { db: instance.db, env }
+  return { db, env: makeEnv() }
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks()
-  await disposeTestD1Instances(instances)
 })
 
 async function request(

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { hashPassword } from 'better-auth/crypto'
 import app from '../src/index'
 import { createAuth } from '../src/auth'
@@ -9,11 +9,10 @@ import {
 } from '../src/services/dns-records'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   markFirstSetupCompleted,
   seedUser,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   AUTH_ORIGIN,
@@ -21,22 +20,28 @@ import {
   sameOriginJsonHeaders
 } from './helpers/auth'
 
-const instances: TestD1[] = []
 const SECRET = 'test-secret-with-at-least-thirty-two-characters'
 
-async function setup() {
-  const instance = await createTestD1()
-  instances.push(instance)
-  await markFirstSetupCompleted(instance.db)
+let shared: SharedTestD1
+let db: D1Database
+
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
+  await markFirstSetupCompleted(db)
+})
+
+function setup() {
   const env = {
-    DB: instance.db,
+    DB: db,
     BETTER_AUTH_SECRET: SECRET,
     DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App',
     DOMAINS: 'example.test'
   } as unknown as Bindings
-  return { db: instance.db, env }
+  return { db, env }
 }
 
 async function createAdminSession(
@@ -87,13 +92,9 @@ async function postJson(
   }, env)
 }
 
-afterEach(async () => {
-  await disposeTestD1Instances(instances)
-})
-
 describe('production route hardening', () => {
   it('adds browser security headers and prevents API caching', async () => {
-    const { env } = await setup()
+    const { env } = setup()
 
     const page = await app.request(`${AUTH_ORIGIN}/login`, {}, env)
     expect(page.headers.get('x-content-type-options')).toBe('nosniff')
@@ -126,7 +127,7 @@ describe('production route hardening', () => {
     ['/api/admin/oauth/provider-id/delete', {}],
     ['/api/admin/mail/test', { to_email: 'recipient@example.test' }]
   ])('requires a super administrator for %s', async (path, body) => {
-    const { db, env } = await setup()
+    const { db, env } = setup()
     const headers = await createAdminSession(db, env, {
       id: 'regular-admin',
       email: 'regular-admin@example.test',
@@ -137,7 +138,7 @@ describe('production route hardening', () => {
     expect(response.status).toBe(403)
   })
   it('saves website settings without changing global settings', async () => {
-    const { db, env } = await setup()
+    const { db, env } = setup()
     await db.prepare(
       "UPDATE settings SET site_page_title = 'Old Title', site_header_name = 'Old Header', dns_mode_enabled = 1, registration_enabled = 0 WHERE id = 'default'"
     ).run()
@@ -167,7 +168,7 @@ describe('production route hardening', () => {
 
 
   it('does not expose Better Auth errors when an admin creates a duplicate user', async () => {
-    const { db, env } = await setup()
+    const { db, env } = setup()
     const headers = await createAdminSession(db, env, {
       id: 'super-admin',
       email: 'super-admin@example.test',
@@ -193,7 +194,7 @@ describe('production route hardening', () => {
   })
 
   it('enforces hard limits on UI-facing record and user lists', async () => {
-    const { db } = await setup()
+    const { db } = setup()
     await seedUser(db, { id: 'owner', email: 'owner@example.test' })
     const now = Date.now()
     for (let i = 0; i < 4; i++) {

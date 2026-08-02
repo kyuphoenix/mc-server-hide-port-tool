@@ -1,14 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { hashPassword } from 'better-auth/crypto'
 import app from '../src/index'
 import { createAuth } from '../src/auth'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   markFirstSetupCompleted,
   seedUser,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   AUTH_ORIGIN,
@@ -16,22 +15,28 @@ import {
   sameOriginJsonHeaders
 } from './helpers/auth'
 
-const instances: TestD1[] = []
 const SECRET = 'test-secret-with-at-least-thirty-two-characters'
 
-async function setup() {
-  const instance = await createTestD1()
-  instances.push(instance)
-  await markFirstSetupCompleted(instance.db)
+let shared: SharedTestD1
+let db: D1Database
+
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
+  await markFirstSetupCompleted(db)
+})
+
+function setup() {
   const env = {
-    DB: instance.db,
+    DB: db,
     BETTER_AUTH_SECRET: SECRET,
     DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
     APP_NAME: 'Test App',
     DOMAINS: 'example.test'
   } as unknown as Bindings
-  return { db: instance.db, env }
+  return { db, env }
 }
 
 async function createSession(
@@ -80,13 +85,9 @@ async function postJson(
   }, env)
 }
 
-afterEach(async () => {
-  await disposeTestD1Instances(instances)
-})
-
 describe('announcement routes', () => {
   it('returns null publicly while disabled', async () => {
-    const { env } = await setup()
+    const { env } = setup()
 
     const response = await app.request(`${AUTH_ORIGIN}/api/announcement/current`, {}, env)
     expect(response.status).toBe(200)
@@ -97,7 +98,7 @@ describe('announcement routes', () => {
   })
 
   it('allows a normal administrator to publish and exposes only public fields', async () => {
-    const { db, env } = await setup()
+    const { db, env } = setup()
     const headers = await createSession(db, env, {
       id: 'announcement-admin',
       email: 'announcement-admin@example.test',
@@ -147,7 +148,7 @@ describe('announcement routes', () => {
   })
 
   it('rejects regular users and requests without CSRF proof', async () => {
-    const { db, env } = await setup()
+    const { db, env } = setup()
     const userHeaders = await createSession(db, env, {
       id: 'announcement-user',
       email: 'announcement-user@example.test',
@@ -170,7 +171,7 @@ describe('announcement routes', () => {
   })
 
   it('returns validation messages and includes announcement data in the admin tab payload', async () => {
-    const { db, env } = await setup()
+    const { db, env } = setup()
     const headers = await createSession(db, env, {
       id: 'announcement-admin-2',
       email: 'announcement-admin-2@example.test',

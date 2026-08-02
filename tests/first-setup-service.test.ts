@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
   FIRST_SETUP_CLAIM_TTL_MS,
   FirstSetupError,
@@ -11,29 +11,16 @@ import {
   reconcileFirstSetup,
   releaseOwnedFirstSetupClaim
 } from '../src/services/first-setup'
-import { createTestD1, disposeTestD1Instances, type TestD1 } from './helpers/d1'
+import { createSharedTestD1, type SharedTestD1 } from './helpers/d1'
 
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
 
-afterEach(async () => {
-  await disposeTestD1Instances(instances)
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
 })
-
-async function setup(): Promise<TestD1> {
-  const instance = await createTestD1()
-  instances.push(instance)
-  return instance
-}
-
-async function setupDb(): Promise<D1Database> {
-  return (await setup()).db
-}
-
-async function disposeInstance(instance: TestD1): Promise<void> {
-  const index = instances.indexOf(instance)
-  if (index >= 0) instances.splice(index, 1)
-  await instance.dispose()
-}
 
 async function rawHash(db: D1Database): Promise<string | null> {
   const row = await db.prepare(
@@ -80,14 +67,12 @@ async function countRows(db: D1Database, table: 'user' | 'account'): Promise<num
 
 describe('first setup claim service', () => {
   it('reads the initial open state', async () => {
-    const db = await setupDb()
     expect(await getFirstSetupState(db)).toEqual({
       status: 'open', claimedAt: null, claimedUserId: null, completedAt: null
     })
   })
 
   it('stores only a SHA-256 hash of a 32-byte claim token', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 1_000)
     const bytes = Uint8Array.from(atob(claim.token), (char) => char.charCodeAt(0))
     expect(bytes).toHaveLength(32)
@@ -101,7 +86,6 @@ describe('first setup claim service', () => {
   })
 
   it('allows exactly one concurrent claimant without overwriting the winner hash', async () => {
-    const db = await setupDb()
     const results = await Promise.allSettled([
       claimFirstSetup(db, 2_000),
       claimFirstSetup(db, 2_000)
@@ -118,7 +102,6 @@ describe('first setup claim service', () => {
   })
 
   it('returns SETUP_DONE for completed state', async () => {
-    const db = await setupDb()
     await db.prepare(
       "UPDATE first_setup SET status='completed', completed_at=1 WHERE id=1"
     ).run()
@@ -126,14 +109,12 @@ describe('first setup claim service', () => {
   })
 
   it('fails closed and completes an open state when a user already exists', async () => {
-    const db = await setupDb()
     await insertSetupUser(db)
     await expect(claimFirstSetup(db, 2_000)).rejects.toMatchObject({ code: 'SETUP_DONE' })
     expect(await getFirstSetupState(db)).toMatchObject({ status: 'completed' })
   })
 
   it('validates and binds a live claim exactly once', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 10_000)
     await assertFirstSetupClaimActive(db, claim.token, 10_001)
     await bindFirstSetupUser(db, { token: claim.token, userId: '1', now: 10_001 })
@@ -148,7 +129,6 @@ describe('first setup claim service', () => {
   })
 
   it('rejects wrong and expired claim tokens', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 10_000)
     await expect(assertFirstSetupClaimActive(db, 'wrong-token', 10_001))
       .rejects.toMatchObject({ code: 'SETUP_CLAIM_INVALID' })
@@ -158,7 +138,6 @@ describe('first setup claim service', () => {
   })
 
   it('requires completed state for ordinary user creation', async () => {
-    const db = await setupDb()
     await expect(assertFirstSetupCompleted(db)).rejects.toMatchObject({
       code: 'SETUP_NOT_READY'
     })
@@ -169,14 +148,12 @@ describe('first setup claim service', () => {
   })
 
   it('releases an unbound owned claim and is idempotent', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 1_000)
     expect(await releaseOwnedFirstSetupClaim(db, claim.token)).toMatchObject({ status: 'open' })
     expect(await releaseOwnedFirstSetupClaim(db, claim.token)).toMatchObject({ status: 'open' })
   })
 
   it('does not release another owner claim', async () => {
-    const db = await setupDb()
     await claimFirstSetup(db, 1_000)
     expect(await releaseOwnedFirstSetupClaim(db, 'wrong-owner')).toMatchObject({
       status: 'claimed'
@@ -184,7 +161,6 @@ describe('first setup claim service', () => {
   })
 
   it('deletes an owned orphan user before reopening', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 1_000)
     await bindFirstSetupUser(db, { token: claim.token, userId: '1', now: 1_001 })
     await insertSetupUser(db)
@@ -194,7 +170,6 @@ describe('first setup claim service', () => {
   })
 
   it('never deletes or reopens a completed credential user', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 1_000)
     await bindFirstSetupUser(db, { token: claim.token, userId: '1', now: 1_001 })
     await insertSetupUser(db)
@@ -207,7 +182,6 @@ describe('first setup claim service', () => {
   })
 
   it('keeps a live claim isolated and reopens a stale unbound claim', async () => {
-    const db = await setupDb()
     await claimFirstSetup(db, 1_000)
     expect(await reconcileFirstSetup(db, 1_000 + FIRST_SETUP_CLAIM_TTL_MS - 1))
       .toMatchObject({ status: 'claimed' })
@@ -216,7 +190,6 @@ describe('first setup claim service', () => {
   })
 
   it('deletes a stale orphan user and reopens idempotently', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 1_000)
     await bindFirstSetupUser(db, { token: claim.token, userId: '1', now: 1_001 })
     await insertSetupUser(db)
@@ -227,7 +200,6 @@ describe('first setup claim service', () => {
   })
 
   it('reconciles a credential to completed if the trigger was unavailable', async () => {
-    const db = await setupDb()
     const claim = await claimFirstSetup(db, 1_000)
     await bindFirstSetupUser(db, { token: claim.token, userId: '1', now: 1_001 })
     await insertSetupUser(db)
@@ -241,31 +213,26 @@ describe('first setup claim service', () => {
 
   it('allows cleanup and credential insertion to converge only to legal states', { timeout: 60_000 }, async () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const instance = await setup()
-      try {
-        const db = instance.db
-        const claim = await claimFirstSetup(db, Date.now())
-        await bindFirstSetupUser(db, { token: claim.token, userId: '1' })
-        await insertSetupUser(db)
-        await Promise.allSettled([
-          releaseOwnedFirstSetupClaim(db, claim.token),
-          insertCredential(db)
-        ])
-        const state = await getFirstSetupState(db)
-        const observed = {
-          status: state.status,
-          users: await countRows(db, 'user'),
-          credentials: Number((await db.prepare(
-            "SELECT COUNT(*) AS count FROM account WHERE providerId = 'credential'"
-          ).first<{ count: number }>())?.count ?? 0)
-        }
-        expect([
-          { status: 'completed', users: 1, credentials: 1 },
-          { status: 'open', users: 0, credentials: 0 }
-        ]).toContainEqual(observed)
-      } finally {
-        await disposeInstance(instance)
+      await shared.resetDatabase()
+      const claim = await claimFirstSetup(db, Date.now())
+      await bindFirstSetupUser(db, { token: claim.token, userId: '1' })
+      await insertSetupUser(db)
+      await Promise.allSettled([
+        releaseOwnedFirstSetupClaim(db, claim.token),
+        insertCredential(db)
+      ])
+      const state = await getFirstSetupState(db)
+      const observed = {
+        status: state.status,
+        users: await countRows(db, 'user'),
+        credentials: Number((await db.prepare(
+          "SELECT COUNT(*) AS count FROM account WHERE providerId = 'credential'"
+        ).first<{ count: number }>())?.count ?? 0)
       }
+      expect([
+        { status: 'completed', users: 1, credentials: 1 },
+        { status: 'open', users: 0, credentials: 0 }
+      ]).toContainEqual(observed)
     }
   })
 

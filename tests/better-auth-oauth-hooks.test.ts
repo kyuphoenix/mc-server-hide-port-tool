@@ -1,16 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAuth, type AuthBindings } from '../src/auth'
 import {
   bindOAuthRegistrationIntentState,
   createOAuthRegistrationIntent
 } from '../src/services/oauth-registration-intents'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   markFirstSetupCompleted,
   seedInvite,
   seedUser,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   AUTH_ORIGIN,
@@ -22,8 +21,27 @@ import {
   setRegistrationPolicy
 } from './helpers/auth'
 
-const instances: TestD1[] = []
 type TestAuth = Awaited<ReturnType<typeof createAuth>>
+
+let shared: SharedTestD1
+let db: D1Database
+
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
+  await markFirstSetupCompleted(db)
+})
+
+function makeEnv(): AuthBindings {
+  return {
+    DB: db,
+    BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
+    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
+    BETTER_AUTH_URL: AUTH_ORIGIN,
+    APP_NAME: 'Test App'
+  }
+}
 
 async function setup(
   policy: { enabled: boolean; mode: 'email' | 'oauth' | 'both'; inviteRequired: boolean } = {
@@ -32,24 +50,14 @@ async function setup(
     inviteRequired: false
   }
 ) {
-  const instance = await createTestD1()
-  instances.push(instance)
-  await markFirstSetupCompleted(instance.db)
-  await setRegistrationPolicy(instance.db, policy)
-  await seedFixtureOAuthProvider(instance.db)
-  const env: AuthBindings = {
-    DB: instance.db,
-    BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
-    DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
-    BETTER_AUTH_URL: AUTH_ORIGIN,
-    APP_NAME: 'Test App'
-  }
-  return { db: instance.db, env, auth: await createAuth(env) }
+  await setRegistrationPolicy(db, policy)
+  await seedFixtureOAuthProvider(db)
+  const env = makeEnv()
+  return { db, env, auth: await createAuth(env) }
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks()
-  await disposeTestD1Instances(instances)
 })
 
 async function startOAuth(auth: TestAuth, requestSignUp: boolean) {

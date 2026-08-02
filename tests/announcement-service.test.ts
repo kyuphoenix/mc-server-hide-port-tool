@@ -1,4 +1,4 @@
-﻿import { afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
   ANNOUNCEMENT_CONTENT_MAX,
   ANNOUNCEMENT_TITLE_MAX,
@@ -6,28 +6,19 @@ import {
   getPublishedAnnouncement,
   updateAnnouncement
 } from '../src/services/announcement'
-import {
-  createTestD1,
-  disposeTestD1Instances,
-  type TestD1
-} from './helpers/d1'
+import { createSharedTestD1, type SharedTestD1 } from './helpers/d1'
 
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
 
-afterEach(async () => {
-  await disposeTestD1Instances(instances)
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
 })
-
-async function setup() {
-  const instance = await createTestD1()
-  instances.push(instance)
-  return instance.db
-}
 
 describe('site announcement service', () => {
   it('starts with a disabled singleton announcement', async () => {
-    const db = await setup()
-
     await expect(getAnnouncement(db)).resolves.toMatchObject({
       enabled: false,
       title: '系统公告',
@@ -40,8 +31,6 @@ describe('site announcement service', () => {
   })
 
   it('publishes trimmed plain text and increments the version on every save', async () => {
-    const db = await setup()
-
     const first = await updateAnnouncement(db, {
       enabled: true,
       title: ' 维护通知 ',
@@ -73,7 +62,6 @@ describe('site announcement service', () => {
   })
 
   it('allows disabling while retaining content and hides disabled announcements publicly', async () => {
-    const db = await setup()
     await updateAnnouncement(db, {
       enabled: true,
       title: '通知',
@@ -93,8 +81,6 @@ describe('site announcement service', () => {
   })
 
   it('validates enabled content and configured length limits', async () => {
-    const db = await setup()
-
     await expect(updateAnnouncement(db, {
       enabled: true,
       title: '',

@@ -8,6 +8,7 @@ export default defineConfig({
     fileParallelism: false,
     isolate: true,
     restoreMocks: true,
-    clearMocks: true
+    clearMocks: true,
+    globalSetup: './tests/global-setup.ts'
   }
 })

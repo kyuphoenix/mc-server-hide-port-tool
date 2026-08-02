@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { hashPassword } from 'better-auth/crypto'
 import app from '../src/index'
 import { createAuth } from '../src/auth'
@@ -7,19 +7,16 @@ import { updateSettings } from '../src/services/settings'
 import { sensitiveDataKeysFromEnv } from '../src/services/sensitive-data'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import {
-  createTestD1,
-  disposeTestD1Instances,
+  createSharedTestD1,
   markFirstSetupCompleted,
   seedUser,
-  type TestD1
+  type SharedTestD1
 } from './helpers/d1'
 import {
   AUTH_ORIGIN,
   cookiesFromHeaders,
   sameOriginJsonHeaders
 } from './helpers/auth'
-
-const instances: TestD1[] = []
 
 const PRIVATE_VALUES = [
   'CF_PRIVATE_BODY',
@@ -36,17 +33,24 @@ const PRIVATE_VALUES = [
   'private-stack'
 ]
 
-async function setup(extraEnv: Partial<Bindings> = {}) {
-  const instance = await createTestD1()
-  instances.push(instance)
-  await markFirstSetupCompleted(instance.db)
-  await seedUser(instance.db, {
+let shared: SharedTestD1
+let db: D1Database
+
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
+  await markFirstSetupCompleted(db)
+  await seedUser(db, {
     id: 'admin-user',
     email: 'admin@example.test',
     name: 'Fixture Admin'
   })
-  const env = {
-    DB: instance.db,
+})
+
+function baseEnv(extraEnv: Partial<Bindings> = {}): Bindings {
+  return {
+    DB: db,
     BETTER_AUTH_SECRET: 'test-secret-with-at-least-thirty-two-characters',
     DATA_ENCRYPTION_KEY: 'test-data-key-with-at-least-thirty-two-characters',
     BETTER_AUTH_URL: AUTH_ORIGIN,
@@ -55,7 +59,10 @@ async function setup(extraEnv: Partial<Bindings> = {}) {
     example_test_CLOUDFLARE_API_TOKEN: 'cf-secret-token',
     ...extraEnv
   } as unknown as Bindings
-  return { db: instance.db, env }
+}
+
+async function setup(extraEnv: Partial<Bindings> = {}) {
+  return { db, env: baseEnv(extraEnv) }
 }
 
 async function adminHeaders(db: D1Database, env: Bindings): Promise<Headers> {
@@ -184,9 +191,8 @@ function parsedSecurityEvents(errorSpy: { mock: { calls: unknown[][] } }): Array
   })
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks()
-  await disposeTestD1Instances(instances)
 })
 
 describe('external service error redaction', { timeout: 60_000 }, () => {
@@ -741,7 +747,7 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
       serverAddress: '198.51.100.20',
       proxied: true
     }, headers)
-    const body = await response.json()
+    const body = await response.json() as { message?: string }
     expect(response.status).toBe(403)
     expect(body.message).toContain('普通 DNS 模式已关闭')
     expect(await db.prepare('SELECT COUNT(*) AS count FROM dns_record WHERE host_name = ?').bind('www.example.test').first()).toEqual({ count: 0 })

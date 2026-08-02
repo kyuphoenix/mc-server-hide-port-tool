@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bindings } from '../src/services/cloudflare-dns'
 import { insertRecord, type DnsRecordRow } from '../src/services/dns-records'
 import {
@@ -7,34 +7,30 @@ import {
   processUserDeletionBatch,
   USER_DELETION_BATCH_SIZE
 } from '../src/services/user-deletion'
-import {
-  createTestD1,
-  disposeTestD1Instances,
-  seedUser,
-  type TestD1
-} from './helpers/d1'
+import { createSharedTestD1, seedUser, type SharedTestD1 } from './helpers/d1'
 
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
 
-afterEach(async () => {
-  await disposeTestD1Instances(instances)
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
 })
 
 async function setup(recordCount: number) {
-  const instance = await createTestD1()
-  instances.push(instance)
-  const adminId = await seedUser(instance.db, { id: '7001' })
-  const userId = await seedUser(instance.db, {
+  const adminId = await seedUser(db, { id: '7001' })
+  const userId = await seedUser(db, {
     id: '7002',
     email: 'delete-target@example.test',
     name: 'Delete Target'
   })
-  await instance.db.prepare(
+  await db.prepare(
     "UPDATE user SET role = 'user', super_admin = 0 WHERE id = ?"
   ).bind(userId).run()
 
   for (let i = 0; i < recordCount; i += 1) {
-    await insertRecord(instance.db, {
+    await insertRecord(db, {
       user_id: userId,
       root_domain: 'example.com',
       subdomain: 'delete-' + i,
@@ -46,10 +42,10 @@ async function setup(recordCount: number) {
       srv_record_id: null
     })
   }
-  await ensureUserDeletionJob(instance.db, userId, adminId)
+  await ensureUserDeletionJob(db, userId, adminId)
   return {
-    db: instance.db,
-    env: { DB: instance.db } as Bindings,
+    db,
+    env: { DB: db } as Bindings,
     userId
   }
 }

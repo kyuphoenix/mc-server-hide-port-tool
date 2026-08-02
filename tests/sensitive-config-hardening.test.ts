@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createOAuthProvider,
   listEnabledOAuthProviders,
@@ -8,15 +8,21 @@ import {
   toGenericOAuthConfig
 } from '../src/services/oauth-providers'
 import { getSettings, updateSettings } from '../src/services/settings'
-import { createTestD1, disposeTestD1Instances, type TestD1 } from './helpers/d1'
+import { createSharedTestD1, type SharedTestD1 } from './helpers/d1'
 
 const SECRET = 'test-secret-with-at-least-thirty-two-characters'
 const TEST_OAUTH_HOSTS = 'accounts.example.com,api.example.com'
-const instances: TestD1[] = []
+let shared: SharedTestD1
+let db: D1Database
 
-afterEach(async () => {
+beforeEach(async () => {
+  shared = await createSharedTestD1()
+  db = shared.db
+  await shared.resetDatabase()
+})
+
+afterEach(() => {
   vi.restoreAllMocks()
-  await disposeTestD1Instances(instances)
 })
 
 function providerInput(overrides: Record<string, unknown> = {}) {
@@ -74,8 +80,6 @@ describe('OAuth URL hardening', () => {
 
 describe('OAuth discovery hardening', () => {
   it('resolves and persists allowlisted discovery endpoints before runtime', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
       issuer: 'https://accounts.example.com',
       authorization_endpoint: 'https://accounts.example.com/oauth/authorize',
@@ -83,7 +87,7 @@ describe('OAuth discovery hardening', () => {
       userinfo_endpoint: 'https://api.example.com/oauth/userinfo'
     }))
 
-    const created = await createOAuthProvider(instance.db, providerInput({
+    const created = await createOAuthProvider(db, providerInput({
       discovery_url: 'https://accounts.example.com/.well-known/openid-configuration',
       authorization_url: '',
       token_url: '',
@@ -95,7 +99,7 @@ describe('OAuth discovery hardening', () => {
       'https://accounts.example.com/.well-known/openid-configuration',
       expect.objectContaining({ redirect: 'manual' })
     )
-    const stored = await instance.db.prepare(
+    const stored = await db.prepare(
       'SELECT authorization_url, token_url, user_info_url FROM oauth_provider WHERE provider_id = ?'
     ).bind('secure-provider').first<Record<string, string>>()
     expect(stored).toMatchObject({
@@ -104,19 +108,17 @@ describe('OAuth discovery hardening', () => {
       user_info_url: 'https://api.example.com/oauth/userinfo'
     })
 
-    const runtime = await listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)
+    const runtime = await listEnabledOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)
     expect(runtime).toHaveLength(1)
-    const config = toGenericOAuthConfig(runtime[0]!, instance.db)
+    const config = toGenericOAuthConfig(runtime[0]!, db)
     expect(config.discoveryUrl).toBeUndefined()
     expect(config.authorizationUrl).toBe('https://accounts.example.com/oauth/authorize')
     expect(config.tokenUrl).toBe('https://accounts.example.com/oauth/token')
   })
 
   it('exposes legacy discovery-only providers on public login pages after resolving endpoints', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
     const now = Date.now()
-    await instance.db.prepare(
+    await db.prepare(
       `INSERT INTO oauth_provider
        (id, provider_id, name, client_id, client_secret, discovery_url,
         authorization_url, token_url, user_info_url, scopes, pkce, enabled,
@@ -140,21 +142,19 @@ describe('OAuth discovery hardening', () => {
       userinfo_endpoint: 'https://api.example.com/oauth/userinfo'
     }))
 
-    await expect(listPublicOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
+    await expect(listPublicOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
       expect.objectContaining({ provider_id: 'legacy-discovery' })
     ])
   })
 
   it('rejects discovery documents that return non-allowlisted endpoints', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
       authorization_endpoint: 'https://accounts.example.com/oauth/authorize',
       token_endpoint: 'https://attacker.example/oauth/token',
       userinfo_endpoint: 'https://api.example.com/oauth/userinfo'
     }))
 
-    const created = await createOAuthProvider(instance.db, providerInput({
+    const created = await createOAuthProvider(db, providerInput({
       discovery_url: 'https://accounts.example.com/.well-known/openid-configuration',
       authorization_url: '',
       token_url: '',
@@ -162,20 +162,18 @@ describe('OAuth discovery hardening', () => {
     }), SECRET, TEST_OAUTH_HOSTS)
 
     expect(created.ok).toBe(false)
-    expect(await instance.db.prepare(
+    expect(await db.prepare(
       'SELECT COUNT(*) AS count FROM oauth_provider'
     ).first<{ count: number }>()).toEqual({ count: 0 })
   })
 
   it('rejects providers without a trusted userinfo endpoint', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
       authorization_endpoint: 'https://accounts.example.com/oauth/authorize',
       token_endpoint: 'https://accounts.example.com/oauth/token'
     }))
 
-    const created = await createOAuthProvider(instance.db, providerInput({
+    const created = await createOAuthProvider(db, providerInput({
       discovery_url: 'https://accounts.example.com/.well-known/openid-configuration',
       authorization_url: '',
       token_url: '',
@@ -183,7 +181,7 @@ describe('OAuth discovery hardening', () => {
     }), SECRET, TEST_OAUTH_HOSTS)
 
     expect(created.ok).toBe(false)
-    expect(await instance.db.prepare(
+    expect(await db.prepare(
       'SELECT COUNT(*) AS count FROM oauth_provider'
     ).first<{ count: number }>()).toEqual({ count: 0 })
   })
@@ -191,32 +189,28 @@ describe('OAuth discovery hardening', () => {
 
 describe('sensitive configuration encryption', () => {
   it('stores OAuth client secrets encrypted and decrypts only for runtime use', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
 
-    const created = await createOAuthProvider(instance.db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
+    const created = await createOAuthProvider(db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
     expect(created.ok).toBe(true)
 
-    const stored = await instance.db
+    const stored = await db
       .prepare('SELECT client_secret FROM oauth_provider WHERE provider_id = ?')
       .bind('secure-provider')
       .first<{ client_secret: string }>()
     expect(stored?.client_secret).toMatch(/^enc:v1:/)
     expect(stored?.client_secret).not.toContain('client-secret-value')
 
-    const runtime = await listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)
+    const runtime = await listEnabledOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)
     expect(runtime[0]?.client_secret).toBe('client-secret-value')
   })
 
   it('keeps valid OAuth providers available when another stored secret cannot be decrypted', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
 
-    const created = await createOAuthProvider(instance.db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
+    const created = await createOAuthProvider(db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
     expect(created.ok).toBe(true)
 
     const now = Date.now()
-    await instance.db.prepare(
+    await db.prepare(
       `INSERT INTO oauth_provider
        (id, provider_id, name, client_id, client_secret, discovery_url,
         authorization_url, token_url, user_info_url, scopes, pkce, enabled,
@@ -237,36 +231,32 @@ describe('sensitive configuration encryption', () => {
     ).run()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await expect(listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
+    await expect(listEnabledOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
       expect.objectContaining({ provider_id: 'secure-provider' })
     ])
-    await expect(listPublicOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
+    await expect(listPublicOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)).resolves.toEqual([
       expect.objectContaining({ provider_id: 'secure-provider' })
     ])
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('secret_unavailable'))
   })
 
   it('rejects enabled providers whose stored endpoints are tampered with', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
 
-    const created = await createOAuthProvider(instance.db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
+    const created = await createOAuthProvider(db, providerInput(), SECRET, TEST_OAUTH_HOSTS)
     expect(created.ok).toBe(true)
-    await instance.db.prepare(
+    await db.prepare(
       'UPDATE oauth_provider SET token_url = ? WHERE provider_id = ?'
     ).bind(
       'https://169.254.169.254/latest/meta-data',
       'secure-provider'
     ).run()
 
-    expect(await listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).toEqual([])
-    expect(await listPublicOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS)).toEqual([])
+    expect(await listEnabledOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)).toEqual([])
+    expect(await listPublicOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS)).toEqual([])
   })
   it('migrates a legacy plaintext OAuth secret when updating without replacing it', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
     const now = Date.now()
-    await instance.db.prepare(
+    await db.prepare(
       `INSERT INTO oauth_provider
        (id, provider_id, name, client_id, client_secret, discovery_url,
         authorization_url, token_url, user_info_url, scopes, pkce, enabled,
@@ -279,7 +269,7 @@ describe('sensitive configuration encryption', () => {
     ).run()
 
     const result = await updateOAuthProvider(
-      instance.db,
+      db,
       'legacy-provider',
       providerInput({ provider_id: 'legacy', client_secret: '' }),
       SECRET,
@@ -287,31 +277,29 @@ describe('sensitive configuration encryption', () => {
     )
     expect(result.ok).toBe(true)
 
-    const stored = await instance.db
+    const stored = await db
       .prepare('SELECT client_secret FROM oauth_provider WHERE id = ?')
       .bind('legacy-provider')
       .first<{ client_secret: string }>()
     expect(stored?.client_secret).toMatch(/^enc:v1:/)
-    expect((await listEnabledOAuthProviders(instance.db, SECRET, TEST_OAUTH_HOSTS))[0]?.client_secret)
+    expect((await listEnabledOAuthProviders(db, SECRET, TEST_OAUTH_HOSTS))[0]?.client_secret)
       .toBe('legacy-plaintext-secret')
   })
 
   it('stores Resend API keys encrypted while preserving settings behavior', async () => {
-    const instance = await createTestD1()
-    instances.push(instance)
 
-    await updateSettings(instance.db, {
+    await updateSettings(db, {
       resend_enabled: true,
       resend_accounts: [{ api_key: 're_test_private_key', from: 'Sender <sender@example.com>' }]
     }, SECRET)
 
-    const stored = await instance.db
+    const stored = await db
       .prepare("SELECT resend_api_key FROM settings WHERE id = 'default'")
       .first<{ resend_api_key: string }>()
     expect(stored?.resend_api_key).toMatch(/^enc:v1:/)
     expect(stored?.resend_api_key).not.toContain('re_test_private_key')
 
-    const settings = await getSettings(instance.db, SECRET)
+    const settings = await getSettings(db, SECRET)
     expect(settings.resend_accounts).toEqual([
       { api_key: 're_test_private_key', from: 'Sender <sender@example.com>' }
     ])
