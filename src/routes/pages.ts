@@ -1,6 +1,6 @@
 import type { Hono } from 'hono'
 import { getCurrentUser, isSuperAdminUser, requireAdmin } from '../auth'
-import { pageShellResponse } from '../lib/page-shell'
+import { pageShellResponse, type PageShellOptions } from '../lib/page-shell'
 import { apiErr, apiOk, maskSettingsForAdmin, publicSettings } from '../lib/api'
 import { safeInternalPath } from '../lib/security'
 import { listAllRecordsPage, listRecentRecordsByUser, searchUsersPage, type UserSearchRole } from '../services/dns-records'
@@ -59,12 +59,19 @@ function serializeUser(user: Awaited<ReturnType<typeof getCurrentUser>>) {
 }
 
 export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
+  // Reads the site favicon from settings and passes it into every page shell.
+  async function shell(c: { env: Bindings }, opts: PageShellOptions): Promise<Response> {
+    const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env)).catch(() => null)
+    const favicon = settings ? (settings.favicon_url || settings.favicon_data || null) : null
+    return pageShellResponse(c as any, { ...opts, favicon })
+  }
+
   app.get('/', async (c) => {
     if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login')
     const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
-    return pageShellResponse(c, {
+    return shell(c, {
       title: settings.site_page_title,
       page: 'home',
       scripts: ['/static/pages-home.js', '/static/main.js']
@@ -76,7 +83,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     const next = safeInternalPath(c.req.query('next'), '/')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return c.redirect(next)
-    return pageShellResponse(c, {
+    return shell(c, {
       title: '登录',
       page: 'login',
       scripts: ['/static/pages-auth.js']
@@ -87,7 +94,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return c.redirect('/')
-    return pageShellResponse(c, {
+    return shell(c, {
       title: '注册',
       page: 'register',
       scripts: ['/static/pages-auth.js']
@@ -98,7 +105,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!(await firstSetupIsCompleted(c.env.DB))) return c.redirect('/setup')
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (user) return c.redirect('/')
-    return pageShellResponse(c, {
+    return shell(c, {
       title: '邮箱验证',
       page: 'verify-email',
       scripts: ['/static/pages-auth.js']
@@ -107,7 +114,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
 
   app.get('/setup', async (c) => {
     if (await firstSetupIsCompleted(c.env.DB)) return c.redirect('/')
-    return pageShellResponse(c, {
+    return shell(c, {
       title: '初始化管理员',
       page: 'setup',
       scripts: ['/static/pages-auth.js']
@@ -115,7 +122,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   })
 
   app.get('/register/github-age-rejected', async (c) => {
-    return pageShellResponse(c, {
+    return shell(c, {
       title: 'GitHub 账号天数未达标',
       page: 'github-age-rejected',
       scripts: ['/static/pages-auth.js']
@@ -125,7 +132,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/settings', async (c) => {
     const user = await getCurrentUser(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/login?next=' + encodeURIComponent('/settings'))
-    return pageShellResponse(c, {
+    return shell(c, {
       title: '个人设置',
       page: 'settings',
       scripts: ['/static/pages-settings.js']
@@ -135,7 +142,7 @@ export function registerPageRoutes(app: Hono<{ Bindings: Bindings }>) {
   app.get('/admin', async (c) => {
     const user = await requireAdmin(c.env, c.req.raw.headers)
     if (!user) return c.redirect('/')
-    return pageShellResponse(c, {
+    return shell(c, {
       title: '管理后台',
       page: 'admin',
       scripts: ['/static/pages-admin.js', '/static/admin-mail.js']

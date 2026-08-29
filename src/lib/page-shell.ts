@@ -7,6 +7,7 @@ export type PageShellOptions = {
   page: string
   scripts?: string[]
   loadingText?: string
+  favicon?: string | null
 }
 
 function escapeAttr(value: string): string {
@@ -36,12 +37,16 @@ export function renderPageShell(opts: PageShellOptions): string {
   const scripts = renderScripts(opts.scripts || [])
   const announcementScript = '<script type="module" src="/static/announcement.js"></script>'
   const loading = opts.loadingText || '\u52a0\u8f7d\u4e2d...'
+  const faviconTag = opts.favicon
+    ? `<link rel="icon" href="${escapeAttr(opts.favicon)}" />`
+    : ''
   return `<!DOCTYPE html>
 <html lang="zh-CN" class="h-full scroll-smooth">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeAttr(opts.title)}</title>
+    ${faviconTag}
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-brand-600 selection:text-white">

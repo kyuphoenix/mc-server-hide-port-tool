@@ -10,10 +10,15 @@ export type ResendAccount = {
   from: string
 }
 
+export type SiteDnsMode = 'mc' | 'dns' | 'both'
+
 export type Settings = {
   site_page_title: string
   site_header_name: string
   dns_mode_enabled: boolean
+  site_dns_mode: SiteDnsMode
+  favicon_url: string
+  favicon_data: string
   registration_enabled: boolean
   registration_mode: 'email' | 'oauth' | 'both'
   invite_required: boolean
@@ -33,6 +38,9 @@ type DbRow = {
   site_page_title: string | null
   site_header_name: string | null
   dns_mode_enabled: number | null
+  site_dns_mode: string | null
+  favicon_url: string | null
+  favicon_data: string | null
   registration_enabled: number
   registration_mode: string
   invite_required: number | null
@@ -52,6 +60,9 @@ export const DEFAULT_SETTINGS: Settings = {
   site_page_title: '子域名分发系统',
   site_header_name: '子域名分发系统',
   dns_mode_enabled: true,
+  site_dns_mode: 'both',
+  favicon_url: '',
+  favicon_data: '',
   registration_enabled: true,
   registration_mode: 'email',
   invite_required: false,
@@ -202,6 +213,13 @@ async function loadSettingsRow(db: D1Database): Promise<DbRow | null> {
     .first<DbRow>()
 }
 
+function normalizeSiteDnsMode(raw: string | null | undefined, legacyEnabled: number | boolean | null | undefined): SiteDnsMode {
+  if (raw === 'mc' || raw === 'dns' || raw === 'both') return raw
+  // Legacy: dns_mode_enabled column (1 = both, 0 = mc); NULL default: both
+  const legacyOn = legacyEnabled == null ? true : legacyEnabled === true || legacyEnabled === 1
+  return legacyOn ? 'both' : 'mc'
+}
+
 export async function getSettings(
   db: D1Database,
   keys?: SensitiveDataKeySource
@@ -216,6 +234,9 @@ export async function getSettings(
     site_page_title: normalizeSiteText(row.site_page_title, DEFAULT_SETTINGS.site_page_title, 80),
     site_header_name: normalizeSiteText(row.site_header_name, DEFAULT_SETTINGS.site_header_name, 40),
     dns_mode_enabled: row.dns_mode_enabled == null ? DEFAULT_SETTINGS.dns_mode_enabled : !!row.dns_mode_enabled,
+    site_dns_mode: normalizeSiteDnsMode(row.site_dns_mode, row.dns_mode_enabled),
+    favicon_url: String(row.favicon_url ?? ''),
+    favicon_data: String(row.favicon_data ?? ''),
     registration_enabled: !!row.registration_enabled,
     registration_mode: normalizeMode(row.registration_mode),
     invite_required: !!row.invite_required,
@@ -244,6 +265,11 @@ export async function updateSettings(
     : ''
   const sitePageTitle = normalizeSiteText(next.site_page_title, DEFAULT_SETTINGS.site_page_title, 80)
   const siteHeaderName = normalizeSiteText(next.site_header_name, DEFAULT_SETTINGS.site_header_name, 40)
+  const siteDnsMode = normalizeSiteDnsMode(next.site_dns_mode, next.dns_mode_enabled)
+  // dns_mode_enabled is now a mirror of site_dns_mode to keep legacy readers working.
+  const dnsModeEnabled = siteDnsMode !== 'mc'
+  const faviconUrl = String(next.favicon_url ?? '').trim().slice(0, 2000)
+  const faviconData = String(next.favicon_data ?? '').slice(0, 300_000)
 
   await db
     .prepare(
@@ -251,6 +277,9 @@ export async function updateSettings(
         site_page_title = ?,
         site_header_name = ?,
         dns_mode_enabled = ?,
+        site_dns_mode = ?,
+        favicon_url = ?,
+        favicon_data = ?,
         registration_enabled = ?,
         registration_mode = ?,
         invite_required = ?,
@@ -269,7 +298,10 @@ export async function updateSettings(
     .bind(
       sitePageTitle,
       siteHeaderName,
-      next.dns_mode_enabled ? 1 : 0,
+      dnsModeEnabled ? 1 : 0,
+      siteDnsMode,
+      faviconUrl,
+      faviconData,
       next.registration_enabled ? 1 : 0,
       next.registration_mode,
       next.invite_required ? 1 : 0,
@@ -288,7 +320,15 @@ export async function updateSettings(
     .run()
 
   invalidateSettingsCache(db)
-  return { ...next, site_page_title: sitePageTitle, site_header_name: siteHeaderName }
+  return {
+    ...next,
+    site_page_title: sitePageTitle,
+    site_header_name: siteHeaderName,
+    site_dns_mode: siteDnsMode,
+    dns_mode_enabled: dnsModeEnabled,
+    favicon_url: faviconUrl,
+    favicon_data: faviconData
+  }
 }
 
 function normalizeSiteText(value: string | null | undefined, fallback: string, maxLength: number): string {

@@ -119,6 +119,9 @@ export function maskSettingsForAdmin(settings: {
   site_page_title: string
   site_header_name: string
   dns_mode_enabled: boolean
+  site_dns_mode: 'mc' | 'dns' | 'both'
+  favicon_url: string
+  favicon_data: string
   registration_enabled: boolean
   registration_mode: string
   invite_required: boolean
@@ -136,6 +139,9 @@ export function maskSettingsForAdmin(settings: {
     site_page_title: settings.site_page_title,
     site_header_name: settings.site_header_name,
     dns_mode_enabled: settings.dns_mode_enabled,
+    site_dns_mode: settings.site_dns_mode,
+    favicon_url: settings.favicon_url,
+    favicon_data: settings.favicon_data,
     registration_enabled: settings.registration_enabled,
     registration_mode: settings.registration_mode,
     invite_required: settings.invite_required,

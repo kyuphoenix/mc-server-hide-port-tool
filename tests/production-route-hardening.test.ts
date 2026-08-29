@@ -151,15 +151,16 @@ describe('production route hardening', () => {
     const response = await postJson(env, '/api/admin/website-settings', {
       site_page_title: 'New Title',
       site_header_name: 'New Header',
-      dns_mode_enabled: false
+      site_dns_mode: 'mc'
     }, headers)
     expect(response.status).toBe(200)
 
     const row = await db.prepare(
-      "SELECT site_page_title, site_header_name, dns_mode_enabled, registration_enabled, registration_mode, invite_required FROM settings WHERE id = 'default'"
+      "SELECT site_page_title, site_header_name, site_dns_mode, dns_mode_enabled, registration_enabled, registration_mode, invite_required FROM settings WHERE id = 'default'"
     ).first()
     expect(row?.site_page_title).toBe('New Title')
     expect(row?.site_header_name).toBe('New Header')
+    expect(row?.site_dns_mode).toBe('mc')
     expect(row?.dns_mode_enabled).toBe(0)
     expect(row?.registration_enabled).toBe(0)
     expect(row?.registration_mode).toBe('email')

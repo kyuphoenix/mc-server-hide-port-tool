@@ -735,9 +735,9 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     assertNoPrivateText(text)
   })
 })
-  it('forbids normal DNS create when dns_mode_enabled is false', async () => {
+  it('forbids normal DNS create when site_dns_mode is mc（普通 DNS 模式已关闭）', async () => {
     const { db, env } = await setup()
-    await db.prepare('UPDATE settings SET dns_mode_enabled = 0 WHERE id = ?').bind('default').run()
+    await db.prepare("UPDATE settings SET site_dns_mode = 'mc' WHERE id = ?").bind('default').run()
     const headers = await adminHeaders(db, env)
     const response = await postJson(env, '/api/create-dns', {
       mode: 'dns',
@@ -751,4 +751,23 @@ describe('external service error redaction', { timeout: 60_000 }, () => {
     expect(response.status).toBe(403)
     expect(body.message).toContain('普通 DNS 模式已关闭')
     expect(await db.prepare('SELECT COUNT(*) AS count FROM dns_record WHERE host_name = ?').bind('www.example.test').first()).toEqual({ count: 0 })
+  })
+
+  it('forbids MC create when site_dns_mode is dns（MC 模式已关闭）', async () => {
+    const { db, env } = await setup()
+    await db.prepare("UPDATE settings SET site_dns_mode = 'dns' WHERE id = ?").bind('default').run()
+    const headers = await adminHeaders(db, env)
+    const response = await postJson(env, '/api/create-dns', {
+      mode: 'mc',
+      subdomain: 'play',
+      rootDomain: 'example.test',
+      recordType: 'A',
+      serverAddress: '198.51.100.10',
+      port: 25565,
+      proxied: true
+    }, headers)
+    const body = await response.json() as { message?: string }
+    expect(response.status).toBe(403)
+    expect(body.message).toContain('MC 模式已关闭')
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM dns_record WHERE host_name = ?').bind('play.example.test').first()).toEqual({ count: 0 })
   })

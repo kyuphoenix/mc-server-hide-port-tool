@@ -137,7 +137,8 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       record_limit: recordLimit,
       record_count: recordCount,
       max_records_per_user: settings.max_records_per_user,
-      dns_mode_enabled: settings.dns_mode_enabled
+      dns_mode_enabled: settings.dns_mode_enabled,
+      site_dns_mode: settings.site_dns_mode
     })
   })
 
@@ -176,8 +177,11 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
         remark
       } = request.value
       const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
-      if (recordMode === 'dns' && !settings.dns_mode_enabled) {
+      if (recordMode === 'dns' && settings.site_dns_mode === 'mc') {
         return c.json({ success: false, message: '普通 DNS 模式已关闭，暂时只能创建 MC 模式记录' }, 403)
+      }
+      if (recordMode === 'mc' && settings.site_dns_mode === 'dns') {
+        return c.json({ success: false, message: 'MC 模式已关闭，暂时只能创建普通 DNS 记录' }, 403)
       }
       const token = getCloudflareApiToken(c.env, rootDomain)
       if (!token) {
@@ -437,8 +441,15 @@ export function registerDnsRoutes(app: Hono<{ Bindings: Bindings }>) {
       }
       if (recordMode === 'dns' && record.record_mode !== 'dns') {
         const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
-        if (!settings.dns_mode_enabled) {
+        if (settings.site_dns_mode === 'mc') {
           return c.json({ success: false, message: '普通 DNS 模式已关闭，无法切换为普通模式记录' }, 403)
+        }
+      }
+
+      if (recordMode === 'mc' && record.record_mode !== 'mc') {
+        const settings = await getSettings(c.env.DB, sensitiveDataKeysFromEnv(c.env))
+        if (settings.site_dns_mode === 'dns') {
+          return c.json({ success: false, message: 'MC 模式已关闭，无法切换为 MC 模式记录' }, 403)
         }
       }
 

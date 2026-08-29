@@ -21,12 +21,17 @@ function csrfHeaders(extra = {}) {
   };
 }
 
-/** @type {{ minSubdomainLength: number, recordLimit: number|null, dnsModeEnabled: boolean }} */
+/** @type {{ minSubdomainLength: number, recordLimit: number|null, siteDnsMode: 'mc'|'dns'|'both' }} */
 let domainMeta = {
   minSubdomainLength: 0,
   recordLimit: null,
-  dnsModeEnabled: true
+  siteDnsMode: 'both'
 };
+
+function deriveSiteDnsMode(raw, legacy) {
+  if (raw === 'mc' || raw === 'dns' || raw === 'both') return raw;
+  return legacy === false || legacy === 0 ? 'mc' : 'both';
+}
 
 /** @type {string|null} */
 let editingId = null;
@@ -86,8 +91,8 @@ function initHomeDns() {
   }
 
   const recordModeSelect = getRecordModeSelect();
-  const initialDnsMode = recordModeSelect ? recordModeSelect.getAttribute('data-dns-mode-enabled') : null;
-  if (initialDnsMode !== null) domainMeta.dnsModeEnabled = initialDnsMode !== '0';
+  const initialDnsMode = recordModeSelect ? recordModeSelect.getAttribute('data-site-dns-mode') : null;
+  if (initialDnsMode === 'mc' || initialDnsMode === 'dns' || initialDnsMode === 'both') domainMeta.siteDnsMode = initialDnsMode;
   if (recordModeSelect && !recordModeSelect.dataset.bound) {
     recordModeSelect.dataset.bound = '1';
     recordModeSelect.addEventListener('change', refreshModeFields);
@@ -214,16 +219,23 @@ function refreshModeFields() {
 
   const modeSelect = getRecordModeSelect();
   if (modeSelect) {
+    const siteDnsMode = domainMeta.siteDnsMode || 'both';
+    const dnsAvailable = siteDnsMode === 'both' || siteDnsMode === 'dns' || editingIsDns;
+    const mcAvailable = siteDnsMode === 'both' || siteDnsMode === 'mc' || (editingId && !editingIsDns);
     const dnsOption = modeSelect.querySelector('option[value="dns"]');
     if (dnsOption) {
-      const dnsAvailable = domainMeta.dnsModeEnabled || editingIsDns;
       dnsOption.hidden = !dnsAvailable;
       dnsOption.disabled = !dnsAvailable;
-      dnsOption.textContent = domainMeta.dnsModeEnabled ? '普通 DNS' : '普通 DNS（已关闭）';
+      dnsOption.textContent = dnsAvailable ? '普通 DNS' : '普通 DNS（已关闭）';
     }
-    if (!domainMeta.dnsModeEnabled && !editingIsDns && modeSelect.value !== 'mc') {
-      modeSelect.value = 'mc';
+    const mcOption = modeSelect.querySelector('option[value="mc"]');
+    if (mcOption) {
+      mcOption.hidden = !mcAvailable;
+      mcOption.disabled = !mcAvailable;
+      mcOption.textContent = mcAvailable ? 'MC 模式' : 'MC 模式（已关闭）';
     }
+    if (modeSelect.value === 'dns' && !dnsAvailable) modeSelect.value = mcAvailable ? 'mc' : 'dns';
+    if (modeSelect.value === 'mc' && !mcAvailable) modeSelect.value = 'dns';
     mode = getRecordMode();
     type = getRecordType();
   }
@@ -263,14 +275,17 @@ function refreshModeFields() {
 }
 
 function refreshRecordModeInfo() {
-  const showDns = domainMeta.dnsModeEnabled;
+  const siteDnsMode = domainMeta.siteDnsMode || 'both';
+  const showDns = siteDnsMode === 'both' || siteDnsMode === 'dns';
+  const showMc = siteDnsMode === 'both' || siteDnsMode === 'mc';
   const dnsSection = getRecordModeInfoDns();
   const mcSection = getRecordModeInfoMc();
   if (dnsSection) dnsSection.hidden = !showDns;
   if (mcSection) {
-    mcSection.classList.toggle('border-t', showDns);
-    mcSection.classList.toggle('border-slate-800', showDns);
-    mcSection.classList.toggle('pt-2.5', showDns);
+    mcSection.hidden = !showMc;
+    mcSection.classList.toggle('border-t', showDns && showMc);
+    mcSection.classList.toggle('border-slate-800', showDns && showMc);
+    mcSection.classList.toggle('pt-2.5', showDns && showMc);
   }
 }
 
@@ -302,7 +317,7 @@ async function loadDomains() {
       data.record_limit === null || data.record_limit === undefined
         ? null
         : Number(data.record_limit);
-    domainMeta.dnsModeEnabled = data.dns_mode_enabled !== false;
+    domainMeta.siteDnsMode = deriveSiteDnsMode(data.site_dns_mode, data.dns_mode_enabled);
 
     if (typeof data.record_count === 'number') {
       setRecordCount(data.record_count);
@@ -721,7 +736,7 @@ async function onRecordsClick(event) {
        data.record_limit === null || data.record_limit === undefined
          ? null
          : Number(data.record_limit);
-      domainMeta.dnsModeEnabled = data.dns_mode_enabled !== false;
+      domainMeta.siteDnsMode = deriveSiteDnsMode(data.site_dns_mode, data.dns_mode_enabled);
      refreshHint();
    }
    showToast(data.message || '记录已删除', 'success');
@@ -804,7 +819,7 @@ async function createDnsRecords() {
         data.record_limit === null || data.record_limit === undefined
           ? null
           : Number(data.record_limit);
-      domainMeta.dnsModeEnabled = data.dns_mode_enabled !== false;
+      domainMeta.siteDnsMode = deriveSiteDnsMode(data.site_dns_mode, data.dns_mode_enabled);
       refreshHint();
     }
 

@@ -180,6 +180,8 @@ function renderSettingsTab(data) {
 
 function renderWebsiteTab(data) {
   const s = data.settings;
+  const dnsMode = s.site_dns_mode || 'both';
+  const currentFavicon = s.favicon_url || s.favicon_data || '';
   return `
   <section class="bg-slate-900/40 border border-slate-800 rounded-lg p-6 sm:p-8">
     <div id="website-settings-alert">${alertBox('error', data.websiteError)}${alertBox('info', data.websiteInfo)}</div>
@@ -196,11 +198,40 @@ function renderWebsiteTab(data) {
           <input type="text" name="site_header_name" value="${escapeAttr(s.site_header_name || '')}" maxlength="40" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" placeholder="子域名分发系统" />
           <p class="mt-1 text-[11px] text-slate-500">显示在主页左上角的站点名称。留空则使用默认名称。</p>
         </div>
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" name="dns_mode_enabled" ${s.dns_mode_enabled ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700" />
-          <span class="text-sm font-medium text-slate-200">启用普通 DNS 模式</span>
-        </label>
-        <p class="text-[11px] text-slate-500 leading-4">关闭后用户只能创建 MC 模式记录；已经存在的普通 DNS 记录仍可修改和删除。</p>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">记录模式</label>
+          <select name="site_dns_mode" class="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-md text-white">
+            <option value="mc" ${dnsMode === 'mc' ? 'selected' : ''}>仅 MC 模式</option>
+            <option value="dns" ${dnsMode === 'dns' ? 'selected' : ''}>仅普通 DNS 模式</option>
+            <option value="both" ${dnsMode === 'both' ? 'selected' : ''}>全部使用（MC + 普通 DNS）</option>
+          </select>
+          <p class="mt-1 text-[11px] text-slate-500 leading-4">“仅 MC 模式”下用户只能创建 MC 模式记录，“仅普通 DNS 模式”下用户只能创建普通 DNS 记录；“全部使用”则两种模式都允许。已经存在的记录仍可修改和删除。</p>
+        </div>
+      </div>
+      <div class="bg-slate-950 p-5 rounded-md border border-emerald-500/15 space-y-4">
+        <div class="flex items-start gap-4">
+          <div class="shrink-0">
+            <div class="w-14 h-14 rounded-lg border border-slate-700 bg-slate-900 flex items-center justify-center overflow-hidden">
+              ${currentFavicon ? `<img id="favicon-preview" src="${escapeAttr(currentFavicon)}" alt="网站图标预览" class="w-full h-full object-contain" />` : '<span id="favicon-preview" class="text-[10px] text-slate-500">无图标</span>'}
+            </div>
+          </div>
+          <div class="flex-1 space-y-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">网站图标 URL（可选）</label>
+              <input type="text" name="favicon_url" id="favicon-url-input" value="${escapeAttr(s.favicon_url || '')}" placeholder="https://example.com/favicon.png" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-sm text-white" />
+              <p class="mt-1 text-[11px] text-slate-500 leading-4">填写公网可访问的图片链接，直接将 favicon 指向该地址。</p>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">上传图标（可选）</label>
+              <div class="flex items-center gap-3">
+                <input type="file" id="favicon-file" accept="image/png,image/jpeg,image/webp,image/gif" class="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-slate-800 file:text-slate-200 file:cursor-pointer hover:file:bg-slate-700" />
+                <input type="hidden" name="favicon_data" id="favicon-data-input" value="${escapeAttr(s.favicon_data || '')}" />
+                ${s.favicon_data ? '<button type="button" id="favicon-remove" class="shrink-0 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md transition">移除上传</button>' : ''}
+              </div>
+              <p class="mt-1 text-[11px] text-slate-500 leading-4">支持 PNG / JPEG / WebP / GIF，图片请勿超过 128KB。上传后编码为 base64 存入数据库，浏览器加载时从数据库读取显示。</p>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="flex justify-end pt-2">
         <button type="submit" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md transition">保存网站设置</button>
@@ -738,6 +769,53 @@ function bindEvents() {
   ensureAdminMailScript();
   bindMailHelpers();
 
+  // Website favicon: file upload → data URL stored into the hidden form field.
+  const faviconFile = document.getElementById('favicon-file');
+  faviconFile?.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    const dataInput = document.getElementById('favicon-data-input');
+    const preview = document.getElementById('favicon-preview');
+    const removeBtn = document.getElementById('favicon-remove');
+    if (!file) return;
+    if (file.size > 128 * 1024) {
+      showToast('图片请勿超过 128KB', 'error');
+      e.target.value = '';
+      return;
+    }
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+      showToast('仅支持 PNG / JPEG / WebP / GIF 图片', 'error');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      if (dataInput) dataInput.value = result;
+      if (preview && preview.tagName === 'IMG') preview.src = result;
+      if (preview && preview.tagName !== 'IMG') {
+        const holder = preview.parentElement;
+        if (holder) holder.innerHTML = `<img id="favicon-preview" src="${escapeAttr(result)}" alt="网站图标预览" class="w-full h-full object-contain" />`;
+      }
+      if (removeBtn) removeBtn.classList.remove('hidden');
+      showToast('图标已读取，保存网站设置后生效', 'success');
+    };
+    reader.onerror = () => {
+      showToast('读取图片失败', 'error');
+      e.target.value = '';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  document.getElementById('favicon-remove')?.addEventListener('click', () => {
+    const dataInput = document.getElementById('favicon-data-input');
+    const preview = document.getElementById('favicon-preview');
+    if (dataInput) dataInput.value = '';
+    if (preview && preview.tagName === 'IMG') {
+      preview.classList.add('hidden');
+    }
+    showToast('已移除上传的图标，保存网站设置后生效', 'info');
+  });
+
   const announcementContent = document.getElementById('announcement-content');
   const announcementCount = document.getElementById('announcement-content-count');
   const updateAnnouncementCount = () => {
@@ -799,7 +877,9 @@ function bindEvents() {
     const payload = {
       site_page_title: String(obj.site_page_title || ''),
       site_header_name: String(obj.site_header_name || ''),
-      dns_mode_enabled: !!obj.dns_mode_enabled
+      site_dns_mode: String(obj.site_dns_mode || 'both'),
+      favicon_url: String(obj.favicon_url || ''),
+      favicon_data: String(obj.favicon_data || '')
     };
     const { data } = await apiPost('/api/admin/website-settings', payload);
     if (data?.success) {

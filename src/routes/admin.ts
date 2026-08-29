@@ -58,6 +58,29 @@ function asBool(v: unknown): boolean {
   return s === '1' || s === 'true' || s === 'on' || s === 'yes'
 }
 
+function parseSiteDnsMode(v: unknown): 'mc' | 'dns' | 'both' {
+  const s = String(v ?? '').trim().toLowerCase()
+  if (s === 'mc' || s === 'dns' || s === 'both') return s
+  return 'both'
+}
+
+// Favicon URL must be a public http(s) image link (or empty to clear)
+const FAVICON_URL_RE = /^https?:\/\/[^\s]+$/i
+
+function isValidFaviconUrl(v: string): boolean {
+  if (!v) return true
+  return FAVICON_URL_RE.test(v) && v.length <= 2000
+}
+
+// Uploaded favicon: data URL (data:image/png|jpeg|webp|gif;base64,...) ≤ ~128KB image
+const FAVICON_DATA_RE = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/
+const FAVICON_DATA_MAX = 180_000
+
+function isValidFaviconData(v: string): boolean {
+  if (!v) return true
+  return FAVICON_DATA_RE.test(v) && v.length <= FAVICON_DATA_MAX
+}
+
 function buildResendAccounts(
   body: Record<string, unknown>,
   current: Settings
@@ -132,10 +155,17 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     if (!isSuperAdminUser(admin)) return apiErr(c, '仅超级管理员可修改系统设置', 403)
 
     const body = await readJsonBody(c)
+    const siteDnsMode = parseSiteDnsMode(body.site_dns_mode)
+    const faviconUrl = String(body.favicon_url ?? '').trim()
+    const faviconData = String(body.favicon_data ?? '' ).trim()
+    if (!isValidFaviconUrl(faviconUrl)) return apiErr(c, '网站图标链接仅支持 http(s):// 开头的图片地址', 400)
+    if (!isValidFaviconData(faviconData)) return apiErr(c, '网站图标上传内容无效或过大（图片请勿超过 128KB）', 400)
     const patch: Partial<Settings> = {
       site_page_title: String(body.site_page_title ?? ''),
       site_header_name: String(body.site_header_name ?? ''),
-      dns_mode_enabled: asBool(body.dns_mode_enabled)
+      site_dns_mode: siteDnsMode,
+      favicon_url: faviconUrl,
+      favicon_data: faviconData
     }
     await updateSettings(c.env.DB, patch, sensitiveDataKeysFromEnv(c.env))
     return apiOk(c, undefined, { message: '网站设置已保存' })
@@ -161,7 +191,6 @@ export function registerAdminRoutes(app: Hono<{ Bindings: Bindings }>) {
     const patch: Partial<Settings> = {
       site_page_title: String(body.site_page_title ?? ''),
       site_header_name: String(body.site_header_name ?? ''),
-      dns_mode_enabled: asBool(body.dns_mode_enabled),
       registration_enabled: asBool(body.registration_enabled),
       registration_mode: modeNorm,
       invite_required: asBool(body.invite_required),
