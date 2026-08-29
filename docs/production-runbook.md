@@ -2,7 +2,7 @@
 
 最后核对日期：2026-07-17
 
-适用对象：Cloudflare Worker `mc-server-hide-port-tool`、D1 数据库 `mc-server-hide-port-tool-db`。
+适用对象：Cloudflare Worker `domain-system`、D1 数据库 `domain-system-db`。
 
 ## 1. 发布前检查
 
@@ -122,38 +122,38 @@ pnpm exec wrangler d1 time-travel restore <drill-db-name> --bookmark <bookmark>
 2. 确认 D1 使用 production backend：
 
 ```powershell
-pnpm exec wrangler d1 info mc-server-hide-port-tool-db
+pnpm exec wrangler d1 info domain-system-db
 ```
 
 3. 获取并保存当前 bookmark：
 
 ```powershell
-pnpm exec wrangler d1 time-travel info mc-server-hide-port-tool-db --json
+pnpm exec wrangler d1 time-travel info domain-system-db --json
 ```
 
 4. 额外导出当前生产状态到受控、加密、限权目录。导出会阻塞数据库请求，应在维护窗口执行：
 
 ```powershell
-pnpm exec wrangler d1 export mc-server-hide-port-tool-db --remote --output .\incident-pre-restore.sql
+pnpm exec wrangler d1 export domain-system-db --remote --output .\incident-pre-restore.sql
 ```
 
 5. 先查询目标时间对应 bookmark，再由两人复核时间、时区和 bookmark：
 
 ```powershell
-pnpm exec wrangler d1 time-travel info mc-server-hide-port-tool-db --timestamp "<RFC3339 timestamp>" --json
+pnpm exec wrangler d1 time-travel info domain-system-db --timestamp "<RFC3339 timestamp>" --json
 ```
 
 6. 恢复原库：
 
 ```powershell
-pnpm exec wrangler d1 time-travel restore mc-server-hide-port-tool-db --bookmark <bookmark>
+pnpm exec wrangler d1 time-travel restore domain-system-db --bookmark <bookmark>
 ```
 
 7. 保存命令输出中的恢复前 bookmark。若恢复点错误，用该 bookmark 撤销。
 8. 重新应用仓库迁移以确认结构完整，然后执行冒烟检查：
 
 ```powershell
-pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+pnpm exec wrangler d1 migrations apply domain-system-db --remote
 node scripts/install-d1-triggers.cjs --remote
 ```
 
@@ -164,8 +164,8 @@ node scripts/install-d1-triggers.cjs --remote
 Worker 回归优先回滚 Worker，不对 D1 做破坏性“降级迁移”。
 
 ```powershell
-pnpm exec wrangler versions list --name mc-server-hide-port-tool
-pnpm exec wrangler rollback <version-id> --name mc-server-hide-port-tool --message "incident rollback <ticket>"
+pnpm exec wrangler versions list --name domain-system
+pnpm exec wrangler rollback <version-id> --name domain-system --message "incident rollback <ticket>"
 ```
 
 回滚后：
@@ -198,7 +198,7 @@ pnpm exec wrangler rollback <version-id> --name mc-server-hide-port-tool --messa
 8. 完成复核后删除 previous：
 
 ```powershell
-pnpm exec wrangler secret delete DATA_ENCRYPTION_KEY_PREVIOUS --name mc-server-hide-port-tool
+pnpm exec wrangler secret delete DATA_ENCRYPTION_KEY_PREVIOUS --name domain-system
 ```
 
 9. 同步清空 GitHub Actions Secrets 中的 `DATA_ENCRYPTION_KEY_PREVIOUS`，重新部署并再次验证。删除 previous 前必须确认所有仍需读取的敏感行已重封装或过期。

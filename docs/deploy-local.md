@@ -14,7 +14,7 @@
 ## 创建 D1 数据库（首次）
 
 ```txt
-pnpm wrangler d1 create mc-server-hide-port-tool-db
+pnpm wrangler d1 create domain-system-db
 ```
 
 将控制台返回的 `database_id` 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id` 字段（替换 `REPLACE_WITH_D1_DATABASE_ID`）。
@@ -24,7 +24,7 @@ pnpm wrangler d1 create mc-server-hide-port-tool-db
 ## 应用迁移
 
 ```txt
-pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+pnpm wrangler d1 migrations apply domain-system-db --remote
 node scripts/install-d1-triggers.cjs --remote
 ```
 
@@ -49,7 +49,7 @@ node scripts/install-d1-triggers.cjs --remote
 本地开发用 `--local` 应用同一套迁移，并安装本地触发器：
 
 ```txt
-pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
+pnpm wrangler d1 migrations apply domain-system-db --local
 node scripts/install-d1-triggers.cjs --local
 ```
 
@@ -145,7 +145,7 @@ pnpm exec wrangler secret put DATA_ENCRYPTION_KEY
 最后先应用**全部**远端 D1 迁移，再发布 Worker；这两步不能颠倒。尤其要确保 `0012_dns_sync_state.sql`、`0013_user_deletion_jobs.sql` 和 `0014_site_announcement.sql` 在新 Worker 接流量前完成：
 
 ```powershell
-pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote
+pnpm exec wrangler d1 migrations apply domain-system-db --remote
 node scripts/install-d1-triggers.cjs --remote
 pnpm deploy
 ```

@@ -114,7 +114,7 @@ pnpm install
 2. 创建 D1 数据库（首次）：
 
 ```txt
-pnpm wrangler d1 create mc-server-hide-port-tool-db
+pnpm wrangler d1 create domain-system-db
 ```
 
 将返回的 `database_id` 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id`（替换 `REPLACE_WITH_D1_DATABASE_ID`）。
@@ -122,7 +122,7 @@ pnpm wrangler d1 create mc-server-hide-port-tool-db
 3. 应用迁移：
 
 ```txt
-pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local
+pnpm wrangler d1 migrations apply domain-system-db --local
 node scripts/install-d1-triggers.cjs --local
 ```
 

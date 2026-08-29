@@ -35,8 +35,8 @@
 - 校验生产迁移：`pnpm run validate:migrations`
 - 生成 Worker 类型：`pnpm run cf-typegen`
 - 部署 Worker：`pnpm run deploy`
-- 本地应用 D1 迁移：`pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --local`
-- 远程应用 D1 迁移：`pnpm wrangler d1 migrations apply mc-server-hide-port-tool-db --remote`
+- 本地应用 D1 迁移：`pnpm wrangler d1 migrations apply domain-system-db --local`
+- 远程应用 D1 迁移：`pnpm wrangler d1 migrations apply domain-system-db --remote`
 - 本地安装 D1 triggers：`node scripts/install-d1-triggers.cjs --local`
 - 远程安装 D1 triggers：`node scripts/install-d1-triggers.cjs --remote`
 

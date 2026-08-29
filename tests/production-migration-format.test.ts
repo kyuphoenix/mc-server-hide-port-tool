@@ -29,10 +29,10 @@ describe('production migration execution', () => {
     const workflow = await readFile('.github/workflows/deploy.yml', 'utf8')
 
     expect(workflow).toContain(
-      'pnpm exec wrangler d1 migrations apply mc-server-hide-port-tool-db --remote'
+      'pnpm exec wrangler d1 migrations apply domain-system-db --remote'
     )
     expect(workflow).not.toContain(
-      'npx wrangler d1 migrations apply mc-server-hide-port-tool-db --remote'
+      'npx wrangler d1 migrations apply domain-system-db --remote'
     )
     expect(workflow).toContain('name: Apply remote D1 migrations')
     expect(workflow).toContain('name: Install remote D1 triggers')

@@ -3,7 +3,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
-const database = 'mc-server-hide-port-tool-db'
+const database = 'domain-system-db'
 const target = process.argv[2]
 if (target !== '--local' && target !== '--remote') {
   console.error('Usage: node scripts/install-d1-triggers.cjs --local|--remote')
