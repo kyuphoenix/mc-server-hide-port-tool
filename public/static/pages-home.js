@@ -48,6 +48,7 @@ function renderHome(data) {
   const siteDnsMode = (data.settings && (data.settings.site_dns_mode || (data.settings.dns_mode_enabled !== false ? 'both' : 'mc'))) || 'both';
   const dnsAvailable = siteDnsMode === 'both' || siteDnsMode === 'dns';
   const mcAvailable = siteDnsMode === 'both' || siteDnsMode === 'mc';
+  const isSingleMode = siteDnsMode === 'mc' || siteDnsMode === 'dns';
   const dnsLabel = dnsAvailable ? '普通 DNS' : '普通 DNS（已关闭）';
   const mcLabel = mcAvailable ? 'MC 模式' : 'MC 模式（已关闭）';
   const siteName = data.settings?.site_header_name || '子域名分发系统';
@@ -62,8 +63,7 @@ function renderHome(data) {
     <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-10">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <div class="flex items-center gap-3">
-         <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold font-mono-custom text-lg">M</div>
-          <span class="font-bold text-white tracking-wide hidden sm:inline-block">${escapeHtml(siteName)}</span>
+          <span class="font-bold text-white tracking-wide">${escapeHtml(siteName)}</span>
         </div>
         <div class="relative text-sm" id="user-menu">
           <button type="button" id="user-menu-toggle" class="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-slate-200 hover:bg-slate-900 hover:border-slate-700 transition" aria-haspopup="menu" aria-expanded="false">
@@ -115,7 +115,7 @@ function renderHome(data) {
                   </div>
                 </div>
               </div>
-              <select id="record-mode" data-site-dns-mode="${escapeAttr(siteDnsMode)}" class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition">
+              <select id="record-mode" data-site-dns-mode="${escapeAttr(siteDnsMode)}"${isSingleMode ? ' data-no-arrow="true" tabindex="-1" aria-disabled="true"' : ''} class="w-full px-4 py-3 bg-slate-950/60 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition${isSingleMode ? ' no-arrow pointer-events-none cursor-default' : ''}">
                 <option value="dns"${dnsAvailable ? '' : ' hidden disabled'}${!mcAvailable ? ' selected' : ''}>${dnsLabel}</option>
                 <option value="mc"${mcAvailable ? '' : ' hidden disabled'}${mcAvailable && !dnsAvailable ? ' selected' : ''}>${mcLabel}</option>
               </select>

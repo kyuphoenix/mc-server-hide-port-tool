@@ -19,6 +19,12 @@ select {
   padding-right: 2.5rem !important;
 }
 
+select.no-arrow,
+select[data-no-arrow="true"] {
+  background-image: none !important;
+  padding-right: 1rem !important;
+}
+
 select option {
   background-color: #0f172a;
   color: #f8fafc;

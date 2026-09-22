@@ -96,6 +96,16 @@ function initHomeDns() {
   if (recordModeSelect && !recordModeSelect.dataset.bound) {
     recordModeSelect.dataset.bound = '1';
     recordModeSelect.addEventListener('change', refreshModeFields);
+    recordModeSelect.addEventListener('mousedown', (e) => {
+      if (recordModeSelect.hasAttribute('data-no-arrow')) {
+        e.preventDefault();
+      }
+    });
+    recordModeSelect.addEventListener('keydown', (e) => {
+      if (recordModeSelect.hasAttribute('data-no-arrow')) {
+        e.preventDefault();
+      }
+    });
   }
   const recordTypeSelect = getRecordTypeSelect();
   if (recordTypeSelect && !recordTypeSelect.dataset.bound) {
@@ -236,6 +246,18 @@ function refreshModeFields() {
     }
     if (modeSelect.value === 'dns' && !dnsAvailable) modeSelect.value = mcAvailable ? 'mc' : 'dns';
     if (modeSelect.value === 'mc' && !mcAvailable) modeSelect.value = 'dns';
+    const isSingleMode = siteDnsMode === 'mc' || siteDnsMode === 'dns';
+    if (isSingleMode) {
+      modeSelect.classList.add('no-arrow', 'pointer-events-none', 'cursor-default');
+      modeSelect.setAttribute('data-no-arrow', 'true');
+      modeSelect.setAttribute('tabindex', '-1');
+      modeSelect.setAttribute('aria-disabled', 'true');
+    } else {
+      modeSelect.classList.remove('no-arrow', 'pointer-events-none', 'cursor-default');
+      modeSelect.removeAttribute('data-no-arrow');
+      modeSelect.removeAttribute('tabindex');
+      modeSelect.removeAttribute('aria-disabled');
+    }
     mode = getRecordMode();
     type = getRecordType();
   }
