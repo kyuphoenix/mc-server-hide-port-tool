@@ -25,10 +25,7 @@
 			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
 			"migrations_dir": "./migrations"
 		}
-	],
-	"vars": {
-		"APP_NAME": "hide-port-tool"
-	}
+	]
 	/**
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings

@@ -30,8 +30,6 @@ GitHub Actions 中 secret 名必须仅含 `[A-Z0-9_]` 且不能以数字开头�
 | `BETTER_AUTH_URL` | 否 | 是 | var `BETTER_AUTH_URL` | 生产 HTTPS origin，不含路径、查询或 fragment |
 
 > workflow 会在安装依赖前检查所有必需 Secrets 是否为空，并验证部署用 `CLOUDFLARE_API_TOKEN` 处于 active 状态。认证密钥、数据密钥和 `BETTER_AUTH_URL` 的强度与格式仍由主程序在运行时执行严格校验；`DATA_ENCRYPTION_KEY_PREVIOUS` 为空时不会注入 Worker。
->
-> `APP_NAME` 已在 `wrangler.jsonc.vars` 中默认 `hide-port-tool`，无需在 CI 设置。
 
 ## 需要配置的仓库 Variables
 
